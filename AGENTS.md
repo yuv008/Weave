@@ -13,7 +13,7 @@ used. The scope is a single tenant and is not permission-safe.
 -   **Slack:** public channels only. Backfill, checkpoints, thread
     replies, signed `POST /slack/events`, and one cited answer are
     implemented. A live human message and a later delete were confirmed
-    on workspace `T0C8H9PPXU7`.
+    on the connected demo workspace. The workspace id stays in `.env`.
 -   **Notion:** REST API version `2026-03-11`. Shared pages become
     `Document` nodes. One live page is stored. Its excerpt is empty
     because the page has a title and no supported block text.

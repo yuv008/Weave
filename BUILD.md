@@ -25,7 +25,7 @@ Update this file when a slice lands or a decision changes. The Grok development 
 - An equal version keeps the stored excerpt and re-merges edges. An older version does not write.
 - A reply may arrive before its parent. The parent is a placeholder until the real message fills it.
 - Deletes blank the excerpt and leave the edges. Earlier versions are not kept.
-- The Slack code path has run against live workspace `T0C8H9PPXU7`. Human `message.channels` delivery and a later delete are both confirmed on the same `#social` node.
+- The Slack code path has run against the connected demo workspace. Human `message.channels` delivery and a later delete were both confirmed on the same public-channel message. The workspace id stays in `.env`.
 - Notion and Drive call their APIs directly. Notion users and Drive owners are not merged into Slack `Person` nodes. `NOTION_VERSION` is `2026-03-11`.
 
 ## What is built
@@ -65,8 +65,8 @@ Tokens and keys stay in `.env` or `secrets/` and are never copied into this file
 
 ### Notion
 
-- An internal Notion integration is configured. `/v1/users/me` succeeded: the integration is a bot in workspace **Yuvraj Sanghai's Space**.
-- `.env` has `NOTION_WORKSPACE_ID=de87560e-92b0-81e5-b99a-000341cccd77` and `NOTION_CONNECTION_ID=notion-main`. The integration token is in `.env` as `NOTION_TOKEN` (not recorded here).
+- An internal Notion integration is configured. `/v1/users/me` succeeded: the integration is a bot in its Notion workspace. The workspace name stays out of this file.
+- The Notion workspace id, connection id, and token stay in `.env`. None of those values are recorded here.
 - `NOTION_VERSION` is pinned to `2026-03-11`.
 - A live poll stored **1** document. It has a source URL and a `HAS_SOURCE` edge. The excerpt is empty because the shared page has a title and no supported block text.
 - Plan: [docs/notion-plan.md](docs/notion-plan.md). Direct REST API only; no Nango.

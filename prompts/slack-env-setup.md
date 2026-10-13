@@ -1,6 +1,6 @@
 # Grok prompt: fill the Weave Slack environment
 
-**Status:** this setup already ran for workspace `T0C8H9PPXU7`. Keep the prompt for a new workspace. Do not print tokens.
+**Status:** this setup already ran for the connected demo workspace. Keep the prompt for a new workspace. Do not print tokens or workspace ids.
 
 Paste this into the Grok bot that has the Slack MCP connected. The bot cannot see this Cursor session. It can see the Slack workspace through MCP.
 

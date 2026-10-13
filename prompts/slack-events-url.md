@@ -24,7 +24,7 @@ Do this in order:
 3. Confirm the tunnel reaches the local app. A POST without a valid Slack signature must return HTTP 401. Do not send the signing secret or the bot token in that check.
 
 4. Save that request URL on the Slack app:
-   - Open https://api.slack.com/apps and select the app installed in workspace `T0C8H9PPXU7`.
+   - Open https://api.slack.com/apps and select the app installed in the connected demo workspace. The workspace id is in `.env` as `WEAVE_WORKSPACE_ID`. Do not print it.
    - Event Subscriptions → Enable Events.
    - Request URL: the `https://<tunnel-host>/slack/events` URL from step 2.
    - Wait until Slack shows the URL as verified. Verification sends a signed `url_verification` challenge. If it fails, the usual cause is that uvicorn was started without `SLACK_SIGNING_SECRET` in its environment, or the tunnel is not forwarding to port 8000.
@@ -37,7 +37,7 @@ Do this in order:
 If you cannot open the Slack app settings, stop after step 3 and reply with only:
 - the exact request URL
 - the one bot event to add: `message.channels`
-- the page where it is saved: Event Subscriptions for the app in workspace `T0C8H9PPXU7`
+- the page where it is saved: Event Subscriptions for the app in the connected demo workspace
 
 Do not invent a verified URL. If Slack has not shown the URL as verified, say it is not verified.
 ```

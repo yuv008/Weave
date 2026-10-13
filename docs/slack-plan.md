@@ -1,6 +1,6 @@
 # Plan: finish Slack
 
-**Status:** the demo slice is implemented. Live checks on workspace `T0C8H9PPXU7` covered a public backfill, a second run that did not duplicate nodes, a cited archive URL, a human `message.channels` delivery, and a delete that blanked the excerpt and kept `CONTAINS`. OAuth, private channels, group DMs, and DMs are still out of scope. The Cloudflare events tunnel is temporary.
+**Status:** the demo slice is implemented. Live checks on the connected workspace covered a public backfill, a second run that did not duplicate nodes, a cited archive URL, a human `message.channels` delivery, and a delete that blanked the excerpt and kept `CONTAINS`. The workspace id stays in `.env`. OAuth, private channels, group DMs, and DMs are still out of scope. The Cloudflare events tunnel is temporary.
 
 Finish one public Slack workspace from fetch through a cited answer. Do not start a second connector in this plan.
 

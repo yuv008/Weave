@@ -1,9 +1,11 @@
-"""The MCP server: the registry's read-only tools over Streamable HTTP, with bearer-token auth.
+"""The agent server: the registry's tools over MCP (Streamable HTTP), plus the answer API, with bearer-token auth.
 
-Every HTTP request resolves its own principal from ``Authorization: Bearer``
-on the MCP surface (a private surface, so the caller is the token's owner).
-The server runs stateless, so a session can never carry an earlier caller's
-identity. The tenant, and therefore the graph, always comes from the token.
+Every HTTP request resolves its own principal from ``Authorization: Bearer``.
+Requests under the MCP path use the MCP surface; ``/answer`` and
+``/actions/...`` use the web surface. Both are private surfaces, so the caller
+is the token's owner. The server runs stateless, so a session can never carry
+an earlier caller's identity. The tenant, and therefore the graph, always
+comes from the token.
 """
 
 import json
@@ -13,38 +15,36 @@ import uuid
 from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 import anyio
 import mcp_types
 from mcp.server.lowlevel import Server
+from starlette.requests import Request
+from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from agents.gate.principal import Principal, Surface
-from agents.gate.resolve import NotAuthorized, PersonInfo, Resolver
+from agents.gate.resolve import NotAuthorized, PersonInfo
 from agents.gate.stores import GraphDirectory
 from agents.graph import ReadOnlyGraph
-from agents.mcp.audit import Audit
-from agents.mcp.schema import input_schema, tool_definition
-from agents.tools import REGISTRY, ToolContext, ToolInputError
-from shared.config import WeaveConfig
+from agents.mcp.schema import tool_definition
+from agents.runtime import Runtime
+from agents.tools import REGISTRY, ToolInputError
+from agents.tools.invoke import invoke
 
 log = logging.getLogger("weave.mcp")
 
 INSTRUCTIONS = (
-    "Weave is the company brain: read-only tools over decisions, owners, figures, dependencies "
+    "Weave is the company brain: tools over decisions, owners, figures, dependencies "
     "and source messages, filtered to what the caller may see. Prefer the most specific tool. "
     "When you use a result, cite its citations (quote, author, date, link). A citation whose "
     "source is 'restricted' is an approved summary: state it without quoting or linking. "
-    "If a tool finds nothing, say so instead of guessing."
+    "If a tool finds nothing, say so instead of guessing. draft_email and notify_owner only "
+    "propose: nothing is sent until the caller confirms."
 )
 
-_JSON_CHECKS = {
-    "string": lambda v: isinstance(v, str),
-    "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
-    "number": lambda v: isinstance(v, int | float) and not isinstance(v, bool),
-    "boolean": lambda v: isinstance(v, bool),
-}
+MAX_QUESTION_CHARS = 2000
 
 
 @dataclass(frozen=True)
@@ -88,21 +88,26 @@ async def _plain(send: Send, status: int, body: bytes, headers: list[tuple[bytes
 
 
 class BearerAuth:
-    """ASGI middleware: no valid token, no MCP. The 401 body never says why."""
+    """ASGI middleware: no valid token, no access. The 401 body never says why."""
 
-    def __init__(self, app: ASGIApp, resolve: Callable[[str], Principal]):
+    def __init__(self, app: ASGIApp, resolve: Callable[[str, Surface], Principal], mcp_path: str = "/mcp"):
         self._app = app
         self._resolve = resolve
+        self._mcp_path = mcp_path
+
+    def surface(self, path: str) -> Surface:
+        return Surface.MCP if path == self._mcp_path or path.startswith(self._mcp_path + "/") else Surface.WEB
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self._app(scope, receive, send)
             return
         token = _bearer(scope)
+        surface = self.surface(scope.get("path", ""))
         try:
             if token is None:
                 raise NotAuthorized()
-            principal = await anyio.to_thread.run_sync(self._resolve, token)
+            principal = await anyio.to_thread.run_sync(self._resolve, token, surface)
         except NotAuthorized:
             await _plain(send, 401, b"not authorized", [(b"www-authenticate", b"Bearer")])
             return
@@ -117,37 +122,13 @@ class BearerAuth:
             _CALLER.reset(reset)
 
 
-def _check_args(name: str, args: dict) -> None:
-    schema = input_schema(REGISTRY[name])
-    props = schema["properties"]
-    unknown = sorted(set(args) - set(props))
-    if unknown:
-        raise ToolInputError(f"unknown arguments {unknown}; allowed {sorted(props)}")
-    missing = [key for key in schema.get("required", []) if args.get(key) is None]
-    if missing:
-        raise ToolInputError(f"missing arguments {missing}")
-    for key, value in args.items():
-        if value is None:
-            continue
-        if not _JSON_CHECKS[props[key]["type"]](value):
-            raise ToolInputError(f"{key} must be a {props[key]['type']}")
-        if "enum" in props[key] and value not in props[key]["enum"]:
-            raise ToolInputError(f"{key} must be one of {props[key]['enum']}")
-
-
 def _error(text: str) -> mcp_types.CallToolResult:
     return mcp_types.CallToolResult(content=[mcp_types.TextContent(type="text", text=text)], is_error=True)
 
 
-def build_server(
-    open_graph: Callable[[str], ReadOnlyGraph],
-    cfg: WeaveConfig,
-    *,
-    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-    pg_connect: Callable | None = None,
-    audit: Audit | None = None,
-) -> Server:
+def build_server(runtime: Runtime) -> Server:
     definitions = [tool_definition(spec) for spec in REGISTRY.values()]
+    audit, cfg = runtime.audit, runtime.cfg
 
     async def list_tools(ctx, params) -> mcp_types.ListToolsResult:
         return mcp_types.ListToolsResult(tools=definitions)
@@ -163,11 +144,8 @@ def build_server(
         started = time.monotonic()
         outcome, node_ids, hidden = "ok", [], 0
         try:
-            _check_args(spec.name, args)
-            tool_ctx = ToolContext(
-                caller.principal, open_graph(caller.principal.tenant), cfg, clock=clock, pg_connect=pg_connect
-            )
-            result = await anyio.to_thread.run_sync(lambda: spec.fn(tool_ctx, **args))
+            tool_ctx = runtime.context(caller.principal, agent="mcp")
+            result = await anyio.to_thread.run_sync(lambda: invoke(spec.name, tool_ctx, args, runtime.cache))
             node_ids, hidden = result.node_ids, result.hidden
             body = result.public(cfg)
             reply = mcp_types.CallToolResult(
@@ -205,19 +183,76 @@ def build_server(
     )
 
 
-def build_app(
-    resolver: Resolver,
-    open_graph: Callable[[str], ReadOnlyGraph],
-    cfg: WeaveConfig,
-    *,
-    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-    pg_connect: Callable | None = None,
-    audit: Audit | None = None,
-    host: str = "127.0.0.1",
-    path: str = "/mcp",
-) -> ASGIApp:
-    server = build_server(open_graph, cfg, clock=clock, pg_connect=pg_connect, audit=audit)
+async def _json_body(request: Request) -> dict | None:
+    try:
+        body = await request.json()
+    except Exception:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def answer_routes(runtime: Runtime, agent) -> list[Route]:
+    """``POST /answer`` and ``POST /actions/{task_id}/confirm`` (web surface)."""
+
+    from agents.answer.actions import ActionNotFound, confirm_action
+    from agents.answer.agent import ConversationNotFound
+
+    async def answer(request: Request):
+        caller = _CALLER.get()
+        if caller is None:
+            return PlainTextResponse("not authorized", status_code=401)
+        body = await _json_body(request)
+        question = (body or {}).get("question")
+        conversation_id = (body or {}).get("conversation_id")
+        if not isinstance(question, str) or not question.strip() or len(question) > MAX_QUESTION_CHARS:
+            return PlainTextResponse(f"question must be 1-{MAX_QUESTION_CHARS} characters", status_code=400)
+        if conversation_id is not None and not isinstance(conversation_id, str):
+            return PlainTextResponse("conversation_id must be a string", status_code=400)
+        try:
+            card = await anyio.to_thread.run_sync(
+                lambda: agent.answer(
+                    caller.principal, question.strip(), conversation_id=conversation_id, request_id=caller.request_id
+                )
+            )
+        except ConversationNotFound:
+            return PlainTextResponse("conversation not found", status_code=404)
+        except Exception:
+            log.exception("answer failed (request %s)", caller.request_id)
+            return PlainTextResponse(f"internal error (request {caller.request_id})", status_code=500)
+        return JSONResponse(card.public())
+
+    async def confirm(request: Request):
+        caller = _CALLER.get()
+        if caller is None:
+            return PlainTextResponse("not authorized", status_code=401)
+        body = await _json_body(request) or {}
+        task_id = request.path_params["task_id"]
+        try:
+            outcome = await anyio.to_thread.run_sync(
+                lambda: confirm_action(runtime, caller.principal, task_id, body.get("decision"), body.get("text"))
+            )
+        except ActionNotFound:
+            return PlainTextResponse("action not found", status_code=404)
+        except ToolInputError as exc:
+            return PlainTextResponse(str(exc), status_code=400)
+        except Exception:
+            log.exception("confirm failed (request %s)", caller.request_id)
+            return PlainTextResponse(f"internal error (request {caller.request_id})", status_code=500)
+        return JSONResponse(outcome)
+
+    return [
+        Route("/answer", answer, methods=["POST"]),
+        Route("/actions/{task_id}/confirm", confirm, methods=["POST"]),
+    ]
+
+
+def build_app(runtime: Runtime, *, agent=None, host: str = "127.0.0.1", path: str = "/mcp") -> ASGIApp:
+    if runtime.resolver is None:
+        raise ValueError("the server needs a resolver")
+    server = build_server(runtime)
+    routes = answer_routes(runtime, agent) if agent is not None else []
     inner = server.streamable_http_app(
-        streamable_http_path=path, json_response=True, stateless_http=True, host=host
+        streamable_http_path=path, json_response=True, stateless_http=True, host=host,
+        custom_starlette_routes=routes,
     )
-    return BearerAuth(inner, lambda token: resolver.for_token(token, Surface.MCP))
+    return BearerAuth(inner, runtime.resolver.for_token, mcp_path=path)

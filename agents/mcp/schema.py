@@ -26,6 +26,8 @@ def _json_type(annotation) -> tuple[str, bool]:
     """JSON type for an annotation, and whether ``None`` is allowed."""
 
     args = typing.get_args(annotation)
+    if typing.get_origin(annotation) is list and args == (str,):
+        return "array", False
     if typing.get_origin(annotation) in (typing.Union, types.UnionType):
         inner = [a for a in args if a is not type(None)]
         if len(inner) != 1:
@@ -42,6 +44,8 @@ def input_schema(spec: ToolSpec) -> dict:
     for param in spec.params:
         json_type, _ = _json_type(hints[param.name])
         prop: dict = {"type": json_type, "description": spec.args[param.name]}
+        if json_type == "array":
+            prop["items"] = {"type": "string"}
         if param.name in spec.choices:
             prop["enum"] = list(spec.choices[param.name])
         if param.default is inspect.Parameter.empty:
@@ -63,7 +67,7 @@ def tool_definition(spec: ToolSpec) -> mcp_types.Tool:
         annotations=mcp_types.ToolAnnotations(
             read_only_hint=spec.mode == "read",
             destructive_hint=False,
-            idempotent_hint=True,
+            idempotent_hint=spec.mode == "read",
             open_world_hint=False,
         ),
     )

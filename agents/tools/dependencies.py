@@ -32,7 +32,7 @@ OPTIONAL MATCH (o:{Label.PERSON})-[:{Rel.OWNS}]->(n)
 OPTIONAL MATCH (n)-[:{Rel.MADE_BY}]->(m:{Label.PERSON})
 RETURN n.{Prop.ID}, labels(n), coalesce(n.{Prop.NAME}, n.{Prop.STATEMENT}), n.{Prop.STATUS}, n.{Prop.PROGRESS},
        collect(DISTINCT {{id: o.{Prop.ID}, name: o.{Prop.NAME}, dept: o.{Prop.DEPT}}}),
-       collect(DISTINCT m.{Prop.DEPT})
+       collect(DISTINCT m.{Prop.DEPT}), n.{Prop.DUE}
 """
 
 
@@ -63,12 +63,12 @@ def _labels(ctx: ToolContext, ids) -> dict[str, str]:
 def _nodes(ctx: ToolContext, ids) -> dict[str, dict]:
     ids = sorted(set(ids))
     out = {}
-    for node, labels, name, status, progress, owners, maker_depts in ctx.rows(_NODES, ids=ids) if ids else []:
+    for node, labels, name, status, progress, owners, maker_depts, due in ctx.rows(_NODES, ids=ids) if ids else []:
         owners = [o for o in owners if o.get("id")]
         depts = [o["dept"] for o in owners if o.get("dept")] + [d for d in maker_depts if d]
         out[node] = {
             "id": node, "label": _label(labels), "name": name, "status": status, "progress": progress,
-            "owners": owners, "dept": depts[0] if depts else None,
+            "due": due, "owners": owners, "dept": depts[0] if depts else None,
         }
     return out
 
@@ -205,7 +205,8 @@ def impact_of(ctx: ToolContext, target: str) -> ToolResult:
     if visible_root:
         root = nodes[fact]
     elif projected:
-        root = {"id": fact, "label": labels[fact], "summary": projected[0].summary, "restricted": True}
+        root = {"id": fact, "label": labels[fact], "summary": projected[0].summary, "restricted": True,
+                "projection_id": projected[0].projection_id}
         result.citations += projected
     else:
         root = {"id": fact, "label": labels[fact], "restricted": True}
@@ -214,7 +215,8 @@ def impact_of(ctx: ToolContext, target: str) -> ToolResult:
         result.hidden += newer_hidden
         newer = _nodes(ctx, [other for other, restricted in entries if restricted is None])
         root["replaced_by"] = [
-            {"id": o, "statement": newer[o]["name"]} if r is None else {"id": o, "summary": r.summary, "restricted": True}
+            {"id": o, "statement": newer[o]["name"]} if r is None
+            else {"id": o, "summary": r.summary, "restricted": True, "projection_id": r.projection_id}
             for o, r in entries
         ]
         result.node_ids += [o for o, _ in entries]

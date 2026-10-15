@@ -1,0 +1,17 @@
+# Selection eval: who asks, the intent the router must pick, and the first
+# tool the planner must call after recall (with the seeded playbooks).
+- {as: sam,   question: "Which SSO provider should I use?",                    intent: lookup,     first_tool: get_decision}
+- {as: priya, question: "Which SSO provider should I use?",                    intent: lookup,     first_tool: get_decision}
+- {as: dev,   question: "Anything new about the onboarding flow?",             intent: lookup,     first_tool: search_context}
+- {as: rohan, question: "What is the budget for SSO integration?",             intent: lookup,     first_tool: get_figures}
+- {as: priya, question: "What is the ARR on the Acme renewal?",                intent: lookup,     first_tool: get_figures}
+- {as: sam,   question: "Why did we switch SSO providers?",                    intent: provenance, first_tool: get_decision}
+- {as: maya,  question: "Who decided to use Provider B for SSO?",              intent: provenance, first_tool: get_decision}
+- {as: dev,   question: "What are the sources for the single sign-on decision?", intent: provenance, first_tool: get_decision}
+- {as: dev,   question: "Who owns the SSO integration?",                       intent: ownership,  first_tool: find_owner}
+- {as: priya, question: "Who should I ask about SSO?",                         intent: ownership,  first_tool: find_owner}
+- {as: priya, question: "What depends on the SSO integration?",                intent: impact,     first_tool: get_decision}
+- {as: maya,  question: "What is affected by the SSO provider change?",        intent: impact,     first_tool: get_decision}
+- {as: priya, question: "Draft a status update for Acme about SSO",            intent: draft,      first_tool: get_dependencies}
+- {as: priya, question: "Let Sam know about the SSO provider change",          intent: draft,      first_tool: get_decision}
+- {as: sam,   question: "Write an email to Acme Corp about the SSO timeline",  intent: draft,      first_tool: get_decision}

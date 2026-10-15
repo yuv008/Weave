@@ -10,6 +10,7 @@ import inspect
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 from agents.gate.principal import Principal
 from agents.gate.visible import gate_params
@@ -94,6 +95,14 @@ class ToolContext:
     pg_connect: Callable | None = None
     embed: Callable[[str], list[float]] | None = None
     """Query embedder for the vector half of search; ``None`` until embeddings exist."""
+    memory: Any = None
+    """The agent memory store (``agents.memory.store.MemoryStore``); memory and propose tools need it."""
+    recipient: Callable[[str], Principal] | None = None
+    """Principal of another person on a private surface, for per-recipient filtering."""
+    agent: str = "answer"
+    """Memory namespace: (tenant, user, agent)."""
+    episode_id: str | None = None
+    """The answer episode this call belongs to, so proposals link back to it."""
 
     def __post_init__(self) -> None:
         if not isinstance(self.graph, ReadOnlyGraph):
@@ -134,6 +143,8 @@ class ToolSpec:
     args: dict[str, str] = field(default_factory=dict)
     choices: dict[str, tuple[str, ...]] = field(default_factory=dict)
     mode: str = "read"
+    """``read``: reads the graph only. ``memory``: also writes the caller's memory namespace.
+    ``propose``: also writes proposal tasks for a person to confirm. No mode writes the graph."""
 
     @property
     def params(self) -> list[inspect.Parameter]:
@@ -143,6 +154,7 @@ class ToolSpec:
 
 
 REGISTRY: dict[str, ToolSpec] = {}
+MODES = ("read", "memory", "propose")
 
 
 def tool(
@@ -152,17 +164,21 @@ def tool(
     dont_use_when: str,
     args: dict[str, str] | None = None,
     choices: dict[str, tuple[str, ...]] | None = None,
+    mode: str = "read",
 ):
-    """Register a read-only tool. Descriptions follow "use when / do not use when" for MCP clients.
+    """Register a tool. Descriptions follow "use when / do not use when" for MCP clients.
 
     ``args`` documents every argument (checked here, so a new argument cannot
     ship undocumented); ``choices`` lists allowed values for enum-like ones.
     """
 
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}")
+
     def register(fn: Callable[..., ToolResult]) -> Callable[..., ToolResult]:
         if name in REGISTRY:
             raise ValueError(f"tool {name!r} registered twice")
-        spec = ToolSpec(name, fn, use_when, dont_use_when, dict(args or {}), dict(choices or {}))
+        spec = ToolSpec(name, fn, use_when, dont_use_when, dict(args or {}), dict(choices or {}), mode)
         names = {p.name for p in spec.params}
         if set(spec.args) != names:
             raise ValueError(f"tool {name!r} must document exactly its arguments {sorted(names)}")

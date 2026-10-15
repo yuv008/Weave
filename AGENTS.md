@@ -51,8 +51,11 @@ wins.
 | Timestamp format | `shared/timefmt.py` |
 | Per-source `min_level`, `cascade_policy`, `authority`; embedding model; thresholds | `config/weave.yaml`, `shared/config.py` |
 | Postgres tables: `group_membership`, `source_sync`, `tenant_acl`, `change_event`, `chunk` | `migrations/001_contract.sql` |
-| Agents-side tables: `api_token` (hashed per-user tokens), `audit_log` (one row per tool call). Ingestion does not write them. | `migrations/002_agent_auth.sql`, `migrations/004_audit_log.sql` |
-| MCP server (read-only tools over HTTP, bearer token per user) | `agents/mcp/`, `python -m agents.mcp` |
+| Agents-side tables: `api_token` (hashed per-user tokens), `audit_log` (one row per tool call or answer), and agent memory: `conversations`, `conversation_turns`, `episodes`, `playbooks`, `tasks`. Ingestion does not write them. | `migrations/002_agent_auth.sql`, `migrations/004_audit_log.sql`, `migrations/005_agent_memory.sql` |
+| MCP server (tools over HTTP, bearer token per user) and the answer API (`POST /answer`, `POST /actions/{id}/confirm`) | `agents/mcp/`, `python -m agents.mcp` |
+| Answer agent (intent routing, bounded tool loop, citation validator, answer card, drafting) | `agents/answer/`, `python -m scripts.ask` |
+| Agent memory (re-gated recall, conversations, task queue) | `agents/memory/` |
+| Impact watcher (flow 3): claims `change_event` rows with `SKIP LOCKED`, runs `impact_of` per recipient as that recipient, queues a gated Slack DM and a customer-update draft, sends dry-run unless `watcher.send: slack` on a real tenant. Writes tasks and audit rows only. | `agents/watcher/`, `python -m agents.watcher`, `python -m scripts.flow3` |
 | Contract checker | `shared/validate.py`, `python -m scripts.validate_graph` |
 | Fake company (reference for what correct output looks like) | `fixtures/acme.py` |
 
@@ -278,8 +281,10 @@ current intended direction is:
     another established backend.
 -   **Agent orchestration:** LangGraph or a small, explicit agent loop;
     avoid adding orchestration complexity without a clear need.
--   **LLM:** Groq is a candidate provider for inference; keep provider
-    configuration replaceable.
+-   **LLM:** still open (Groq and Grok are candidates); keep provider
+    configuration replaceable. The answer agent reads `answer.llm` in
+    `config/weave.yaml`; `provider: none` runs the rule-based components,
+    and a provider is one adapter class in `agents/answer/llm.py`.
 -   **Frontend:** React is the intended direction. Cytoscape.js is a
     candidate for interactive graph visualization.
 -   **Connector layer:** Nango where its supported integration and sync

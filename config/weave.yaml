@@ -21,6 +21,31 @@ figure_stale_days: 30
 # Expertise (find_owner) decays with item age; an item this old counts half.
 expertise_half_life_days: 30
 
+# Answer agent (agents side only).
+answer:
+  # Tool calls per question, recall included.
+  max_tool_calls: 6
+  # A claim without an evidence id: drop it, or keep it marked unsupported.
+  citation_policy: drop
+  recall_limit: 5
+  # Memory stores node ids and a short note, never facts.
+  note_max_chars: 200
+  # Read-tool results are cached per visibility hash for this long.
+  cache_ttl_seconds: 60
+  llm:
+    # Still open (Groq or Grok). "none" runs the rule-based components.
+    provider: none
+
+# Impact watcher (agents side only): python -m agents.watcher.
+watcher:
+  # Change events claimed per tick; handoffs and DMs use the same limit.
+  batch: 20
+  # Seconds between ticks with --every and no value.
+  every: 60
+  # dry_run records the DM on the task. slack posts it, never for the
+  # fixture tenant, and needs SLACK_BOT_TOKEN.
+  send: dry_run
+
 # Default authority by system: formal documents 3, trackers 2, chat 1.
 authority:
   notion: 3

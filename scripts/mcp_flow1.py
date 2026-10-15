@@ -7,27 +7,13 @@ prints it. Prints the decision and its citations as Cursor would receive them.
 """
 
 import argparse
-import os
-from pathlib import Path
 
 import anyio
 import httpx2
 from mcp.client.client import Client
 from mcp.client.streamable_http import streamable_http_client
 
-TOKENS = Path(__file__).resolve().parent.parent / ".env.tokens"
-
-
-def token_for(who: str) -> str:
-    key = f"WEAVE_TOKEN_{who.upper()}"
-    if os.environ.get(key):
-        return os.environ[key]
-    if TOKENS.exists():
-        for line in TOKENS.read_text(encoding="utf-8").splitlines():
-            name, _, value = line.partition("=")
-            if name.strip() == key and value.strip():
-                return value.strip()
-    raise SystemExit(f"{key} not set; run: python -m scripts.issue_demo_tokens > .env.tokens")
+from scripts.tokens import token_for
 
 
 async def run(url: str, token: str, topic: str) -> None:

@@ -9,6 +9,7 @@ from starlette.testclient import TestClient
 from agents.graph import ReadOnlyGraph
 from agents.mcp.audit import MemoryAudit
 from agents.mcp.server import build_app
+from agents.runtime import Runtime
 from agents.tools import REGISTRY
 from fixtures.acme import build
 from shared.config import load_config
@@ -39,7 +40,7 @@ def server():
         opened.append(tenant)
         return ReadOnlyGraph(EmptyGraph(), f"co:{tenant}")
 
-    app = build_app(resolver, open_graph, load_config(), clock=lambda: NOW, audit=audit)
+    app = build_app(Runtime(open_graph, load_config(), resolver=resolver, clock=lambda: NOW, audit=audit))
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         yield SimpleNamespace(fx=fx, store=store, audit=audit, opened=opened, client=client)
 
@@ -83,7 +84,7 @@ def test_tool_list_is_the_registry_with_use_when_descriptions(server):
     assert set(tools) == set(REGISTRY)
     for name, tool in tools.items():
         assert "\nUse when: " in tool["description"] and "\nDo not use when: " in tool["description"], name
-        assert tool["annotations"]["readOnlyHint"] is True
+        assert tool["annotations"]["readOnlyHint"] is (REGISTRY[name].mode == "read"), name
         assert tool["annotations"]["destructiveHint"] is False
         schema = tool["inputSchema"]
         assert not set(schema["properties"]) & FORBIDDEN, name
@@ -143,7 +144,7 @@ def test_unexpected_errors_are_masked(server):
     resolver, store = fixture_resolver(fx)
     store.add_token("tok-sam", fx.ids["sam"])
     audit = MemoryAudit()
-    app = build_app(resolver, broken, load_config(), clock=lambda: NOW, audit=audit)
+    app = build_app(Runtime(broken, load_config(), resolver=resolver, clock=lambda: NOW, audit=audit))
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         response = client.post(
             "/mcp",
@@ -165,7 +166,7 @@ def test_audit_failure_does_not_break_the_answer(server):
     resolver, store = fixture_resolver(fx)
     store.add_token("tok-sam", fx.ids["sam"])
     open_graph = lambda tenant: ReadOnlyGraph(EmptyGraph(), f"co:{tenant}")  # noqa: E731
-    app = build_app(resolver, open_graph, load_config(), clock=lambda: NOW, audit=Broken())
+    app = build_app(Runtime(open_graph, load_config(), resolver=resolver, clock=lambda: NOW, audit=Broken()))
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         response = client.post(
             "/mcp",

@@ -1,4 +1,4 @@
-"""Agents cannot write: every registered tool is read-only, and no tool module has a write path."""
+"""Agents cannot write the graph: read tools only read; memory and propose tools write only through the memory store."""
 
 import re
 from pathlib import Path
@@ -7,7 +7,7 @@ import pytest
 
 from agents.graph import ReadOnlyGraph
 from agents.tools import REGISTRY, ToolContext
-from agents.tools.base import Citation, PathEdge, RestrictedCitation, ToolResult
+from agents.tools.base import MODES, Citation, PathEdge, RestrictedCitation, ToolResult
 from agents.tools.decisions import _as_of
 from agents.tools.search import fuse
 from fixtures.acme import build
@@ -16,16 +16,29 @@ from tests.gate_support import person_principal
 
 TOOLS_DIR = Path(__file__).resolve().parent.parent / "agents"
 EXPECTED = {
-    "search_context", "get_decision", "trace_decision", "find_owner",
-    "get_figures", "get_dependencies", "impact_of", "dept_rollup",
+    "search_context": "read", "get_decision": "read", "trace_decision": "read", "find_owner": "read",
+    "get_figures": "read", "get_dependencies": "read", "impact_of": "read", "dept_rollup": "read",
+    "remember": "memory", "recall_memory": "memory", "draft_email": "propose", "notify_owner": "propose",
 }
+WRITE_SQL = re.compile(r"\b(INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE)\b")
 
 
-def test_every_catalogue_tool_is_registered_read_only():
-    assert set(REGISTRY) == EXPECTED
+def test_every_catalogue_tool_is_registered_with_its_mode():
+    assert {name: spec.mode for name, spec in REGISTRY.items()} == EXPECTED
     for spec in REGISTRY.values():
-        assert spec.mode == "read"
+        assert spec.mode in MODES
         assert spec.use_when and spec.dont_use_when
+
+
+def test_tool_modules_have_no_write_statements_and_no_direct_database_writes():
+    tools = TOOLS_DIR / "tools"
+    for path in tools.glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        assert not WRITE_SQL.search(text), f"{path} contains a write statement"
+        assert ".commit(" not in text, path
+    for name in ("memory.py", "drafts.py"):
+        text = (tools / name).read_text(encoding="utf-8")
+        assert "pg_connect" not in text and "connect_pg" not in text, name
 
 
 def test_no_agent_module_can_write_the_graph():
@@ -36,7 +49,8 @@ def test_no_agent_module_can_write_the_graph():
         assert not write_call.search(text), f"{path} calls query()"
         assert "import falkordb" not in text and "from falkordb" not in text, path
         scanned.add(path.relative_to(TOOLS_DIR).as_posix())
-    assert {"tools/base.py", "mcp/server.py", "mcp/__main__.py"} <= scanned
+    assert {"tools/base.py", "tools/drafts.py", "tools/memory.py", "mcp/server.py", "mcp/__main__.py",
+            "memory/store.py", "answer/agent.py", "answer/loop.py"} <= scanned
 
 
 def test_tool_context_requires_read_only_graph():

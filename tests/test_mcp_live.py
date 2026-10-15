@@ -13,6 +13,7 @@ from mcp.client.streamable_http import streamable_http_client
 
 from agents.mcp.audit import MemoryAudit
 from agents.mcp.server import build_app
+from agents.runtime import Runtime
 from shared.config import load_config
 from tests.gate_support import NOW, fixture_resolver
 from tests.tool_support import live, scratch  # noqa: F401
@@ -27,7 +28,7 @@ def served(scratch):
     for who in ("sam", "priya"):
         store.add_token(f"tok-{who}", fx.ids[who])
     audit = MemoryAudit()
-    app = build_app(resolver, lambda tenant: graph, load_config(), clock=lambda: NOW, audit=audit)
+    app = build_app(Runtime(lambda tenant: graph, load_config(), resolver=resolver, clock=lambda: NOW, audit=audit))
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]

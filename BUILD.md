@@ -103,7 +103,7 @@ Contract additions: dependency edges carry `evidence_ids`; config gains `hidden_
 The tools above over the Python MCP SDK (Streamable HTTP, stateless, JSON responses), in `agents/mcp/`.
 
 - **Auth:** every request carries `Authorization: Bearer <token>`. The gate resolves it on the MCP surface, which is private, so the caller is the token's owner. The tenant and graph come from the token. A missing, unknown or revoked token gets 401 "not authorized", with no other detail.
-- **Tool list:** built from the registry. Descriptions read "Use when / Do not use when", every argument is documented, and every tool is marked `readOnlyHint`. Input schemas come from the signatures, so they never offer a user, tenant or surface.
+- **Tool list:** built from the registry. Descriptions read "Use when / Do not use when", every argument is documented, and read tools are marked `readOnlyHint` (memory and propose tools from Part 5 are not). Input schemas come from the signatures, so they never offer a user, tenant or surface.
 - **Errors:** bad arguments return a tool error with a plain message. Anything else returns "internal error (request id)"; details go only to the server log.
 - **Audit:** one `audit_log` row per call (`migrations/004_audit_log.sql`), with the caller, tool, arguments, node ids, hidden count, outcome and time.
 
@@ -128,11 +128,115 @@ Flow 1: ask Cursor "I'm starting the SSO endpoint. Which SSO provider should I u
 
 Tests: `tests/test_mcp_server.py` (offline: auth, tool list, arguments, error masking, audit, one principal per request) and `tests/test_mcp_live.py` (real HTTP server, SDK client, scratch graph; `WEAVE_LIVE_TESTS=1`).
 
+## Answer agent and memory (15 October 2026)
+
+A question goes in and a cited answer card comes out (`agents/answer/`). No LLM provider is chosen yet: with `answer.llm.provider: none`, a rule-based router, planner and composer run every flow. The LLM versions sit behind one `LLM` protocol and are tested with a scripted fake.
+
+- **Steps:**
+  1. Re-gate the conversation so far.
+  2. Route the question to an intent: lookup, provenance, ownership, impact or draft.
+  3. Match its subjects (names and aliases, longest first).
+  4. Recall memory.
+  5. Run the tool loop.
+  6. Compose claims.
+  7. Validate them and build the card.
+  8. Write one `audit_log` row (`kind='answer'`), the episode and the conversation turns.
+- **Intents:** each intent allows only its own tools (`ALLOWED` in `intents.py`). For example, a lookup cannot draft an email.
+- **Guards** (same for any planner):
+  - at most `answer.max_tool_calls` (6) calls, recall included
+  - the tool must be allowed for the intent
+  - an id argument must already have appeared in this run (subject match, recall or an earlier result)
+  - arguments are checked by `agents/tools/invoke.py`, which MCP uses too
+
+  A refused step is recorded in the trace and never reaches a tool.
+- **Playbooks:** named steps per role and intent, versioned in `playbooks`. Built-in defaults apply when none is stored. `python -m scripts.seed_playbooks` adds the API-question, provenance, sales-draft (flow 2) and impact playbooks.
+- **Citation contract:** a claim stands only on evidence returned in this run. Evidence can be a citation item, an approved projection, or a graph edge (`path:src|rel|dst`, for structural facts such as ownership). `answer.citation_policy` is `drop` (default) or `flag`, which keeps the claim marked unverified.
+- **Card:**
+  - the answer and the claims, each with its evidence: quote, author, date, source and link, or the restricted summary
+  - the path edges
+  - freshness, e.g. "Active since Oct 12, replaces Provider A (Oct 3)", or a figure's as-of date and stale badge
+  - confidence: the lowest among cited facts, with "likely" labels and conflicts side by side
+  - `hidden_count` only with `hidden_sources_notice`
+- **Drafting** (`agents/tools/drafts.py`, `mode="propose"`): both tools write a `tasks` row in state `proposed` and nothing else.
+  - `draft_email` re-gates each fact and writes one sentence per fact with numbered footnotes.
+  - `notify_owner` keeps only the evidence both people may see, using the recipient's own principal, and refuses if none is left.
+  - `confirm_action` (`agents/answer/actions.py`) is for people only and is not a tool. It records accept, edit or reject on the proposal and as feedback on the episode. An accepted note becomes a ready `slack_dm` task for `slack_sender` (Part 6 sends it), with the evidence re-checked at confirm time. An accepted email stays a draft.
+- **Memory** (`agents/memory/`, `migrations/005_agent_memory.sql`): conversations and turns, episodes, playbooks and tasks, namespaced by (tenant, user, agent).
+  - `remember` stores node ids plus a note of at most 200 characters, never facts.
+  - `recall_memory` searches the caller's own episodes with Postgres full text and re-gates every id with `visible_node_ids`. An entry with any id the caller can no longer see is dropped without a trace.
+  - Earlier turns of a conversation are re-gated the same way; a turn that fails shows "earlier answer no longer available".
+  - Nothing is recalled or kept for channels.
+  - `claim_task` uses `FOR UPDATE SKIP LOCKED`.
+- **Cache:** read-tool results are cached for `answer.cache_ttl_seconds` per visibility hash. The hash includes `acl_epoch`, so a revocation always misses.
+
+Run it (the server from the MCP section also serves `POST /answer` and `POST /actions/{id}/confirm` on the web surface):
+
+```
+python -m scripts.seed_playbooks                                        # once
+python -m scripts.ask --as sam "Which SSO provider should I use?"       # flow 1 card
+python -m scripts.ask --as priya "Draft a status update for Acme about SSO"
+python -m scripts.confirm_action <proposal id> accept --as priya        # or edit --text "...", or reject
+```
+
+Adding an LLM provider: write one class with `complete(messages, tools, json_schema) -> LLMReply` in `agents/answer/llm.py`, construct it in `build_components`, and set `answer.llm` in `config/weave.yaml`.
+
+Tests:
+- `tests/test_answer_offline.py`: the 15-question set in `tests/data/questions.yaml` (intent and first tool), the guards, the validator, the card, the LLM path and the HTTP routes.
+- `tests/test_answer_live.py`: flows 1 and 2, provenance, impact, notify, confirm and audit on the scratch graph.
+- `tests/test_memory.py`: offline, plus live Postgres under a throwaway tenant.
+
+## Impact watcher (flow 3) (15 October 2026)
+
+A worker in `agents/watcher/` turns `change_event` rows into gated notices, customer-update drafts and Slack DMs. It reads the graph and writes only tasks and audit rows. Nothing in `change_event` or `migrations/` changed.
+
+- **Claiming events** (`outbox.py`): one transaction per event, `FOR UPDATE SKIP LOCKED` on the direct Neon endpoint. A normal exit marks the event processed. An error rolls back, so the event stays pending and is retried on the next tick. Workers never wait on each other.
+- **Per recipient** (`watcher.py`):
+  - `affected_owners` (ungated) only picks whom to ask. Each person then runs `impact_of` with their own principal on the Slack DM surface.
+  - Only live work in their own result that lists them as owner counts. Someone with nothing of their own gets nothing; the audit records a count, never ids.
+  - The notice is built from that result only. A root they cannot see reads "A decision your work depends on was replaced"; its statement, evidence and links never reach them.
+  - Two tasks are written with deterministic ids, so a replayed event writes nothing new:
+    - `notice:{event}:{person}`: a ready `slack_dm` for `slack_sender`.
+    - `handoff:{event}:{person}`: a ready `draft_customer_update` for `answer`, ids only.
+  - One `audit_log` row per recipient (`kind='watcher'`, outcome `notified`, `filtered` or `error`).
+- **Handoff** (`handoff.py`): the recipient is resolved again and every id re-gated. The answer agent then drafts as them (`intent=draft`, seeded subjects and the at-risk commitment). The result is a `proposal_email` created by the recipient in their own episode, confirmed with `scripts.confirm_action`. The handoff ends `done`, `expired` or `failed`.
+- **Sender** (`sender.py`): claims ready `slack_dm` tasks, from the watcher and from Part 5's `confirm_action`. It re-gates the evidence for the recipient at send time and expires the DM if none is visible. Once the linked handoff is done it appends "Draft customer update ready to review: {proposal id}".
+- **Order:** each tick runs events, then handoffs, then sends (`worker.py`), so the first DM already points at the draft.
+
+Dry run vs Slack (`watcher:` in `config/weave.yaml`):
+- `send: dry_run` (the default) stores `{transport, to, text, at}` as `delivery` on the task and marks it `sent`.
+- `send: slack` posts with `conversations.open` and `chat.postMessage` using `SLACK_BOT_TOKEN`. It is used only for a non-fixture tenant and a person with a real Slack user id. The token stays in the Authorization header.
+- `acme` is always a dry run; its Slack ids are fake.
+
+What each recipient sees on the fixture:
+
+| Recipient | Notice |
+| --- | --- |
+| Priya | Her commitment "SSO will be live for Acme by Nov 15." (due 2026-11-15) is at risk, and "Use Provider B for SSO." is now in effect (via roadmap #42). Provider A is never named: it is restricted for her. No `#eng-sso` id, quote or link. The draft cites `#deal-acme`, roadmap #42 and the approved projection. |
+| Everyone else | Nothing. Only Priya owns work resting on Provider A. |
+
+Run it:
+
+```
+python -m agents.watcher --tenant acme --once                 # one tick; --every [SECONDS] keeps going
+python -m agents.watcher --steps events                       # only claim events; also handoffs, sends
+python -m scripts.flow3 --tenant acme --reset                 # demo: replay the fixture event, print Priya's view
+```
+
+`--reset` refuses any tenant but `acme`. It marks the fixture's change event pending again. It deletes that event's `notice:` and `handoff:` tasks, the draft each handoff produced, and that draft's episode and conversation. The run on 15 October 2026 printed the notice above, `Handoff [done]` and a draft that states both facts.
+
+Tests:
+- `tests/test_watcher_offline.py`: wording per change kind; the notice only from the recipient's own result; nothing for a recipient who sees nothing; deterministic ids and replays; ids-only handoff payload; handoff expiry; sender re-gate; tick order and the draft pointer.
+- `tests/test_watcher_live.py`: flow 3 on the scratch graph with Neon memory under a throwaway tenant. Only Priya is notified. There is no Provider A and no `#eng-sso` id, quote or link. Her evidence is visible to her. One handoff gives a `proposal_email` by Priya. The dry-run DM carries the pointer. A second run and a replay add nothing.
+- `tests/test_watcher_outbox_live.py`: Neon `change_event` under a throwaway tenant. Two connections get different rows, a rollback leaves the row pending, a commit marks it processed, and three threads take each row once.
+
 ## What is not built
 
 - Slack OAuth install flow
 - Person names, decisions, `MENTIONS`, files, reactions, and attachments
-- A model-backed answer
+- An LLM provider adapter (the answer agent runs on rule-based components)
+- Semantic memory, nightly consolidation, vector recall, and LLM-written conversation summaries
+- Live Slack sending has not run against a real tenant (the watcher's `send: slack` path is tested with a stubbed HTTP client only)
+- A retry limit for an event that keeps failing (it is logged, audited as `error` and retried every tick)
 - A web UI and per-user ACLs
 
 ## Connected sources

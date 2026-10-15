@@ -87,7 +87,8 @@ def _related(ctx: ToolContext, decision_id: str, result: ToolResult, *, older: b
             card = cards[other]
             out.append({k: card[k] for k in ("id", "statement", "valid_from", "valid_to")})
         else:
-            out.append({"id": other, "summary": restricted.summary, "restricted": True})
+            out.append({"id": other, "summary": restricted.summary, "restricted": True,
+                        "projection_id": restricted.projection_id})
             result.citations.append(restricted)
         result.node_ids.append(other)
     return out
@@ -139,7 +140,8 @@ def get_decision(
     if not visible:
         projected = projections_for(ctx, ids)
         for decision, restricted in projected.items():
-            result.data["decisions"].append({"id": decision, "summary": restricted[0].summary, "restricted": True})
+            result.data["decisions"].append({"id": decision, "summary": restricted[0].summary, "restricted": True,
+                                             "projection_id": restricted[0].projection_id})
             result.citations.extend(restricted)
             result.node_ids.append(decision)
         result.hidden += len(set(ids) - set(projected))
@@ -213,7 +215,8 @@ def trace_decision(ctx: ToolContext, decision_id: str) -> ToolResult:
     if not ctx.rows(_VISIBLE_DECISION, id=decision_id):
         projected = projections_for(ctx, [decision_id]).get(decision_id)
         if projected:
-            result.data["decision"] = {"id": decision_id, "summary": projected[0].summary, "restricted": True}
+            result.data["decision"] = {"id": decision_id, "summary": projected[0].summary, "restricted": True,
+                                       "projection_id": projected[0].projection_id}
             result.citations.extend(projected)
             result.node_ids.append(decision_id)
         else:

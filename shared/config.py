@@ -28,6 +28,38 @@ class SourcePolicy(BaseModel):
     org_wide: bool = False
 
 
+class LLMConfig(BaseModel):
+    """The answer agent's model. ``none`` runs the rule-based router, planner and composer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = "none"
+    model: str | None = None
+    base_url: str | None = None
+    api_key_env: str | None = None
+
+
+class AnswerConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_tool_calls: int = Field(default=6, gt=0, le=12)
+    citation_policy: Literal["drop", "flag"] = "drop"
+    recall_limit: int = Field(default=5, ge=0)
+    note_max_chars: int = Field(default=200, gt=0)
+    cache_ttl_seconds: float = Field(default=60, ge=0)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
+
+
+class WatcherConfig(BaseModel):
+    """The impact watcher worker (``python -m agents.watcher``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    batch: int = Field(default=20, gt=0)
+    every: int = Field(default=60, gt=0)
+    send: Literal["dry_run", "slack"] = "dry_run"
+
+
 class WeaveConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -41,6 +73,8 @@ class WeaveConfig(BaseModel):
     expertise_half_life_days: int = Field(default=30, gt=0)
     authority: dict[str, int]
     sources: dict[str, SourcePolicy]
+    answer: AnswerConfig = Field(default_factory=AnswerConfig)
+    watcher: WatcherConfig = Field(default_factory=WatcherConfig)
 
     @field_validator("authority")
     @classmethod

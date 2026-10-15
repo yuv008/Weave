@@ -61,7 +61,8 @@ def get_figures(ctx: ToolContext, subject: str, name: str | None = None) -> Tool
     if not visible:
         projected = projections_for(ctx, ids)
         for figure, restricted in projected.items():
-            result.data["figures"].append({"id": figure, "summary": restricted[0].summary, "restricted": True})
+            result.data["figures"].append({"id": figure, "summary": restricted[0].summary, "restricted": True,
+                                           "projection_id": restricted[0].projection_id})
             result.citations.extend(restricted)
             result.node_ids.append(figure)
         result.hidden += len(set(ids) - set(projected))
@@ -86,7 +87,8 @@ def get_figures(ctx: ToolContext, subject: str, name: str | None = None) -> Tool
                 card["history"].append({k: older[other][k] for k in ("id", "value", "unit", "as_of", "valid_to")})
                 result.path.append(PathEdge(figure, Rel.SUPERSEDES, other))
             else:
-                card["history"].append({"id": other, "summary": restricted.summary, "restricted": True})
+                card["history"].append({"id": other, "summary": restricted.summary, "restricted": True,
+                                        "projection_id": restricted.projection_id})
                 result.citations.append(restricted)
             result.node_ids.append(other)
         result.data["figures"].append(card)

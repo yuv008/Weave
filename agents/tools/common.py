@@ -126,6 +126,59 @@ def visible_claims(ctx: ToolContext, claim_ids: list[str]) -> set[str]:
     return {row[0] for row in ctx.rows(_VISIBLE_CLAIMS, ids=list(claim_ids))}
 
 
+_LABELS = f"""
+UNWIND $ids AS nid
+MATCH (n {{{Prop.ID}: nid}})
+RETURN nid, labels(n), coalesce(n.{Prop.PROVISIONAL}, false)
+"""
+
+_VISIBLE_ITEMS = f"""
+UNWIND $ids AS nid
+MATCH (i {{{Prop.ID}: nid}})
+WHERE {item_visible("i")}
+RETURN i.{Prop.ID}
+"""
+
+_VISIBLE_PROJECTIONS = f"""
+UNWIND $ids AS nid
+MATCH (p:{Label.PROJECTION} {{{Prop.ID}: nid}})
+WHERE {projection_visible("p")}
+RETURN p.{Prop.ID}
+"""
+
+CLAIM_LABELS = (Label.DECISION, Label.COMMITMENT, Label.FIGURE)
+
+
+def visible_node_ids(ctx: ToolContext, node_ids: list[str]) -> set[str]:
+    """The ids the caller may see now. Unknown ids are not visible.
+
+    Items and sources use the source rule, claims need visible evidence,
+    projections must be approved for the caller, and other nodes (people,
+    teams, topics, projects, customers, deals) are visible unless provisional
+    and hidden by config.
+    """
+
+    ids = sorted({i for i in node_ids if isinstance(i, str) and i})
+    if not ids:
+        return set()
+    items, claims, projections, visible = [], [], [], set()
+    for nid, labels, provisional in ctx.rows(_LABELS, ids=ids):
+        if Label.ITEM in labels or Label.SOURCE in labels:
+            items.append(nid)
+        elif any(label in labels for label in CLAIM_LABELS):
+            claims.append(nid)
+        elif Label.PROJECTION in labels:
+            projections.append(nid)
+        elif not (provisional and ctx.cfg.hide_provisional):
+            visible.add(nid)
+    if items:
+        visible |= {row[0] for row in ctx.rows(_VISIBLE_ITEMS, ids=items)}
+    visible |= visible_claims(ctx, claims)
+    if projections:
+        visible |= {row[0] for row in ctx.rows(_VISIBLE_PROJECTIONS, ids=projections)}
+    return visible
+
+
 def projections_for(ctx: ToolContext, claim_ids: list[str]) -> dict[str, list[RestrictedCitation]]:
     """Approved projections the caller may see, per claim."""
 

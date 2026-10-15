@@ -1,0 +1,50 @@
+# Shared config. Ingestion stamps these values on Source nodes; agents filter on them.
+# Changes need both builders.
+
+tenant: acme
+
+embedding:
+  model: BAAI/bge-small-en-v1.5
+  dim: 384
+
+# Claims under this confidence are labelled "likely".
+likely_threshold: 0.7
+# Provisional entities (seen once by resolution) are hidden from agents.
+hide_provisional: true
+# A source whose last good ACL sync is older than this is excluded.
+acl_stale_minutes: 15
+
+# Default authority by system: formal documents 3, trackers 2, chat 1.
+authority:
+  notion: 3
+  gdrive: 3
+  github: 2
+  slack: 1
+
+# Per-source policy, keyed by the source's ACL group string.
+sources:
+  "slack:C0ENGSSO":
+    name: "#eng-sso"
+    min_level: 0
+    cascade_policy: broadcast
+    authority: 1
+  "slack:C0DEALACME":
+    name: "#deal-acme"
+    min_level: 0
+    cascade_policy: manual
+    authority: 1
+  "slack:C0LEADERS":
+    name: "#leadership"
+    min_level: 2
+    cascade_policy: broadcast
+    authority: 1
+  "github:demo-org/sso-service":
+    name: "demo-org/sso-service"
+    min_level: 0
+    cascade_policy: manual
+    authority: 2
+  "notion:sales-deals":
+    name: "Sales deals"
+    min_level: 0
+    cascade_policy: manual
+    authority: 3

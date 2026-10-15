@@ -3,6 +3,10 @@ __pycache__/
 .pytest_cache/
 *.pyc
 .env
+.env.local
 secrets/
 tools/
 logs/
+.neon
+node_modules/
+.env.local

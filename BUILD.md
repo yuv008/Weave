@@ -52,6 +52,22 @@ Update this file when a slice lands or a decision changes. The Grok development 
 
 Local check on 14 October 2026: `53 passed`. FalkorDB ran in Docker container `weave-falkordb`, host port `6380`. `.env.example` defaults the port to `6379`. Use `FALKORDB_PORT=6380` for that container.
 
+## Shared contract and fake graph (15 October 2026)
+
+Agents are built against a seeded fake company while ingestion moves onto the contract. Nothing in `app/` changed.
+
+| Piece | Location | Behavior |
+| --- | --- | --- |
+| Schema constants | `shared/schema.py` | Labels, edges, properties and statuses from the architecture doc. Existing ids and property names are kept; contract labels (`Item`, `Source`) sit next to `Message`, `Document` and `Conversation`. |
+| Ids, ACL, time | `shared/ids.py`, `shared/acl.py`, `shared/timefmt.py` | Id builders reproduce the formats above. ACL strings are `slack:C123`, `github:org/repo`, `notion:x`, `gdrive:x`, `org:all`. Timestamps are UTC at seconds precision. |
+| Config | `config/weave.yaml`, `shared/config.py` | Per-source `min_level`, `cascade_policy`, `authority`; `bge-small-en-v1.5` at 384 dimensions; `likely_threshold`; `hide_provisional`. |
+| Postgres | `migrations/001_contract.sql` | `group_membership`, `source_sync`, `tenant_acl`, `change_event` outbox, `chunk` with `vector(384)`. |
+| Fixture | `fixtures/acme.py`, `python -m scripts.seed_fixture` | Five people, five sources, Provider A superseded by B, Acme commitment, budget figure, projections, one ChangeEvent. Graph `co:acme`. |
+| Validator | `python -m scripts.validate_graph` | Evidence, required properties, ACL strings, statuses, supersession, edge directions. `--fixture` runs offline. |
+| First query | `python -m scripts.query_active_decision --as sam` | Active SSO decision with the evidence Sam may see. |
+
+Open: confirm source memberships against the visibility matrix diagram, the `draft`/`approved` projection status, and whether `REPLIES_TO` stays in the contract.
+
 ## What is not built
 
 - Slack OAuth install flow

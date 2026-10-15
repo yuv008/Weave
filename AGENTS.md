@@ -25,6 +25,134 @@ Full bodies stay out of the graph. Notion users and Drive owners are
 not merged into Slack `Person` nodes. There is no OAuth install flow,
 web UI, or model-backed answer yet.
 
+## Shared contract: ingestion and agents (read first)
+
+As of 15 October 2026 the work is split in two and runs in parallel.
+The source of truth is `Documents/Company Brain — Architecture.pdf`.
+
+-   **Ingestion (`app/`, connectors, extraction, resolution,
+    supersede, graph writes):** owned by the connector builder.
+-   **Agents (permission gate, MCP tools, answer agent, impact
+    watcher):** owned by the agent builder. Built against a fake
+    company graph until real ingestion output passes the validator.
+
+Both sides import the frozen contract in `shared/`. Changes to
+`shared/`, `config/weave.yaml`, or `migrations/` need both builders.
+Where this section disagrees with sections 4 and 5 below, this section
+wins.
+
+### Where things are
+
+| Piece | Location |
+| --- | --- |
+| Labels, edge types, properties, statuses, required fields, allowed edge endpoints | `shared/schema.py` |
+| Node id builders (reproduce the existing `app/` formats) | `shared/ids.py` |
+| ACL group strings | `shared/acl.py` |
+| Timestamp format | `shared/timefmt.py` |
+| Per-source `min_level`, `cascade_policy`, `authority`; embedding model; thresholds | `config/weave.yaml`, `shared/config.py` |
+| Postgres tables: `group_membership`, `source_sync`, `tenant_acl`, `change_event`, `chunk` | `migrations/001_contract.sql` |
+| Contract checker | `shared/validate.py`, `python -m scripts.validate_graph` |
+| Fake company (reference for what correct output looks like) | `fixtures/acme.py` |
+
+### Stores
+
+-   **FalkorDB Cloud** for graphs. The company graph is `co:{tenant}`,
+    private graphs are `u:{tenant}:{user}`. Connection comes from
+    `FALKORDB_URL` (`falkor://user:password@host:port`). Code in
+    `shared/` reads it through `shared/graphdb.py`.
+-   **Neon Postgres** (pgvector) for memberships, sync times, the
+    ChangeEvent outbox and chunks. `DATABASE_URL` is the pooled
+    endpoint for queries; `DATABASE_URL_UNPOOLED` is direct and must be
+    used for migrations. `shared/pg.py` picks the right one.
+-   Credentials are shared privately and live in `.env` / `.env.local`
+    (both gitignored). Never commit, log or print them.
+-   Tenant `acme` (graph `co:acme`) is the fake company. Do not write
+    real data there. Real ingestion output goes to its own tenant, for
+    example `WEAVE_TENANT=real` (graph `co:real`).
+
+Setup check: `pip install -e .[dev] falkordb`, then
+`python -m scripts.check_stores` (all `ok`), then
+`python -m scripts.query_active_decision --as sam` (prints "Use
+Provider B for SSO" with two citations).
+
+### Contract rules for graph writes
+
+1.  Never type a label, edge type, property name or status in a query.
+    Import it from `shared/schema.py`.
+2.  Keep the existing node ids. Build them with `shared/ids.py`;
+    `tests/test_shared_contract.py` checks they equal the `app/`
+    builders. People are keyed by email (`person_id`), entities by
+    normalized name (`entity_id`), claims by first evidence item plus
+    statement (`claim_id`).
+3.  Keep source-specific labels and add the contract label next to
+    them: a Slack message is `:Message:Item`, a Notion or Drive page is
+    `:Document:Item`, a GitHub issue is `:Issue:Item`, a Slack channel
+    is `:Conversation:Source`. Agents query only `Item` and `Source`.
+4.  Keep the existing property names (`source`, `source_url`,
+    `occurred_at`, `excerpt`, `content_hash`, `version`, `deleted`).
+    `REQUIRED_PROPS` in `shared/schema.py` lists what each label needs.
+5.  Every `Item` and `Source` carries `acl_groups` (a non-empty list
+    built with `shared/acl.py`, for example `slack:C123`,
+    `github:org/repo`, `notion:x`, `gdrive:x`, or `org:all`) and
+    `min_level` (0 to 3). Sources also carry `cascade_policy` and
+    `authority` from `config/weave.yaml`.
+6.  Each `Item` has exactly one `IN_SOURCE` edge and an `AUTHORED_BY`
+    edge to a `Person`.
+7.  Every `Decision`, `Commitment` and `Figure` has at least one
+    `EVIDENCED_BY` edge to an `Item` with `quote`, `span` (`[start,
+    end]` into the item text) and `confidence` (0 to 1). No evidence,
+    no fact.
+8.  Claim `status` is `active`, `superseded` or `retracted`. A
+    commitment's delivery state goes in `progress` (`open`, `at_risk`,
+    `done`). Active claims have no `valid_to`.
+9.  Supersede, never overwrite: add the new claim, add
+    `(new)-[:SUPERSEDES]->(old)`, set the old claim's `status` to
+    `superseded` and its `valid_to`, then insert one `change_event` row
+    (`fact_id` = old id, `kind` = `superseded`, `new_fact_id`,
+    `processed` = false). Event ids are `{fact_id}:{kind}`, so retries
+    are safe.
+10. Projections (cascaded summaries) get `status` `draft` or
+    `approved`, an `audience` list of ACL strings, `level_floor` and
+    `origin_id`, plus one `SUMMARIZES` edge to the origin claim.
+11. Timestamps come from `shared.timefmt.to_ts` (UTC, seconds
+    precision). Dates without a time are `YYYY-MM-DD`.
+12. Writes use `MERGE` on `id` inside `UNWIND` batches so retries
+    change nothing. Agents never write the company graph.
+13. Group memberships go to `group_membership` with the same ACL
+    strings, and every ACL sync updates `source_sync.last_good_sync_at`
+    and raises `tenant_acl.acl_epoch` when anything changed.
+14. Chunks go to the `chunk` table with `acl_groups` and `min_level`
+    copied from the item, embedded with the model and dimension in
+    `config/weave.yaml` (`BAAI/bge-small-en-v1.5`, 384).
+
+### Ingestion to-do to reach the contract
+
+-   Port `app/graph/upsert.py` and `app/graph/upsert_document.py` to
+    add the `Item` / `Source` labels, `acl_groups`, `min_level`,
+    `IN_SOURCE` and `AUTHORED_BY`, using `shared/` constants. Keep the
+    existing edges until both builders agree to drop them.
+-   Resolve people across Slack, GitHub and Notion into one `Person`
+    keyed by email with `slack_id`, `github_login`, `notion_user`,
+    `level` and `dept` (from a seeded org chart).
+-   Point graph writes at `co:{tenant}` instead of the `weave` graph.
+-   Add extraction of `Decision`, `Commitment` and `Figure` with
+    `EVIDENCED_BY`, the supersede step with `change_event` rows, and
+    projections for `broadcast` sources.
+-   Move sync state (`SyncState`, `SyncFailure`, `SlackEvent`) to
+    Postgres when convenient.
+-   Done when `python -m scripts.validate_graph --tenant <tenant>`
+    reports `errors=0` on real output. Then agents switch to that
+    tenant by changing `WEAVE_TENANT`.
+
+### Open decisions (both builders)
+
+-   Source memberships in `fixtures/acme.py` against the visibility
+    matrix on page 15 of the architecture doc.
+-   Projection `draft` / `approved` status (not in the doc yet).
+-   Whether `REPLIES_TO` stays in the contract.
+-   Whether `AUTHORED` and `CONTAINS` are dropped once `AUTHORED_BY`
+    and `IN_SOURCE` are written.
+
 ## 1. Product overview
 
 **Weave** is a company-wide intelligence and organizational-memory

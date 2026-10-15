@@ -36,11 +36,21 @@ def test_fixture_cast_and_sources(fx):
     people = [n for n in fx.nodes if n.label == Label.PERSON]
     sources = [n for n in fx.nodes if n.label == Label.SOURCE]
     assert sorted(p.props[Prop.NAME] for p in people) == ["Dev", "Maya", "Priya", "Rohan", "Sam"]
-    assert len(sources) == 5
+    assert len(sources) == 9
+    assert len(fx.source_sync) == 9
     person_ids = {p.id for p in people}
     for membership in fx.memberships:
         assert membership["person_id"] in person_ids
         assert is_acl(membership["acl_group"])
+
+
+def test_org_wide_items_keep_their_source_group(fx):
+    for key in ("item_eng_public_update", "item_roadmap_issue"):
+        acl = fx.node_by_key(key).props[Prop.ACL_GROUPS]
+        assert len(acl) == 2 and ORG_WIDE in acl
+    for node in fx.nodes:
+        if Label.ITEM in node.labels:
+            assert any(g != ORG_WIDE for g in node.props[Prop.ACL_GROUPS]), node.id
 
 
 def test_supersession_story(fx):
@@ -70,7 +80,7 @@ def test_projections(fx):
     assert approved.props[Prop.AUDIENCE] == [ORG_WIDE]
     assert draft.props[Prop.STATUS] == ProjectionStatus.DRAFT
     budget_items = [e.dst for e in fx.edges if e.rel == Rel.EVIDENCED_BY and e.src == fx.ids["figure_q4_budget"]]
-    assert all(fx.node(i).props[Prop.MIN_LEVEL] == 2 for i in budget_items)
+    assert sorted(fx.node(i).props[Prop.MIN_LEVEL] for i in budget_items) == [2, 3]
 
 
 def test_evidence_spans_point_at_the_quote(fx):
@@ -102,6 +112,32 @@ def test_validator_catches_bad_values(fx):
     assert "bad acl string 'slack C0DEALACME'" in errors
     assert "missing valid_from" in errors
     assert "superseded by" in errors
+
+
+def test_dependency_edges_carry_evidence(fx):
+    deps = [e for e in fx.edges if e.rel in (Rel.NEEDS, Rel.DEPENDS_ON, Rel.BLOCKED_BY)]
+    assert len(deps) == 3
+    item_ids = {n.id for n in fx.nodes if Label.ITEM in n.labels}
+    for edge in deps:
+        assert edge.props[Prop.EVIDENCE_IDS] and set(edge.props[Prop.EVIDENCE_IDS]) <= item_ids
+
+
+def test_validator_catches_bad_dependency_evidence(fx):
+    nodes, edges = _rows(fx)
+    for edge in edges:
+        if edge.rel == Rel.NEEDS:
+            edge.props.pop(Prop.EVIDENCE_IDS)
+        if edge.rel == Rel.DEPENDS_ON and edge.dst == fx.ids["decision_provider_a"]:
+            edge.props[Prop.EVIDENCE_IDS] = [fx.ids["decision_provider_b"]]
+    errors = "\n".join(validate("acme", nodes, edges))
+    assert "NEEDS" in errors and "missing evidence_ids" in errors
+    assert "is not an Item" in errors
+
+
+def test_figure_history(fx):
+    f0, f1 = fx.node_by_key("figure_q4_budget_draft"), fx.node_by_key("figure_q4_budget")
+    assert f0.props[Prop.STATUS] == Status.SUPERSEDED
+    assert (Rel.SUPERSEDES, f1.id, f0.id) in {(e.rel, e.src, e.dst) for e in fx.edges}
 
 
 def test_validator_catches_wrong_edge_direction(fx):
@@ -150,5 +186,8 @@ def test_seed_twice_then_query_active_decision(live_graph, fx):
     assert row[3] == "Use Provider A for SSO."
     assert {e["author"] for e in row[4]} == {"Dev"}
 
-    level, groups = principal(fx, "rohan")
-    assert active_decision(live_graph, fx.ids["topic_sso"], level, groups) is None
+    level, groups = principal(fx, "priya")
+    row = active_decision(live_graph, fx.ids["topic_sso"], level, groups)
+    assert row[0] == fx.ids["decision_provider_b"]
+    assert row[3] is None
+    assert [e["url"] for e in row[4]] == ["https://github.com/demo-org/roadmap/issues/42"]

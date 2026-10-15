@@ -95,7 +95,13 @@ Provider B for SSO" with two citations).
     built with `shared/acl.py`, for example `slack:C123`,
     `github:org/repo`, `notion:x`, `gdrive:x`, or `org:all`) and
     `min_level` (0 to 3). Sources also carry `cascade_policy` and
-    `authority` from `config/weave.yaml`.
+    `authority` from `config/weave.yaml`. An org-wide source (any
+    employee may read it) is never just `org:all`: its items carry
+    their own source group plus `org:all`, for example
+    `["slack:C0ENGPUB", "org:all"]` (`shared.config.source_acl` builds
+    this from `org_wide: true`). The gate hides an item when any of its
+    non-`org:all` groups has no `source_sync` within 15 minutes, so a
+    stale org-wide source fails closed like any other.
 6.  Each `Item` has exactly one `IN_SOURCE` edge and an `AUTHORED_BY`
     edge to a `Person`.
 7.  Every `Decision`, `Commitment` and `Figure` has at least one
@@ -114,8 +120,17 @@ Provider B for SSO" with two citations).
 10. Projections (cascaded summaries) get `status` `draft` or
     `approved`, an `audience` list of ACL strings, `level_floor` and
     `origin_id`, plus one `SUMMARIZES` edge to the origin claim.
+    `broadcast` sources write `approved`; `manual` sources write
+    `draft`, which a manager approves (architecture doc). Agents show
+    only `approved`.
 11. Timestamps come from `shared.timefmt.to_ts` (UTC, seconds
     precision). Dates without a time are `YYYY-MM-DD`.
+    Dependency edges (`NEEDS`, `DEPENDS_ON`, `BLOCKED_BY`) carry
+    `evidence_ids`: a non-empty list of the `Item` ids that justify the
+    edge (for example the message where Sales says the deal needs SSO).
+    Agents show an edge only when the caller can see at least one of
+    those items and every claim at either end, so an edge without
+    `evidence_ids` is never shown.
 12. Writes use `MERGE` on `id` inside `UNWIND` batches so retries
     change nothing. Agents never write the company graph.
 13. Group memberships go to `group_membership` with the same ACL
@@ -146,9 +161,6 @@ Provider B for SSO" with two citations).
 
 ### Open decisions (both builders)
 
--   Source memberships in `fixtures/acme.py` against the visibility
-    matrix on page 15 of the architecture doc.
--   Projection `draft` / `approved` status (not in the doc yet).
 -   Whether `REPLIES_TO` stays in the contract.
 -   Whether `AUTHORED` and `CONTAINS` are dropped once `AUTHORED_BY`
     and `IN_SOURCE` are written.

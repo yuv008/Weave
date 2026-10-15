@@ -24,7 +24,11 @@ WHERE i.{Prop.MIN_LEVEL} <= $level
   AND ANY(g IN i.{Prop.ACL_GROUPS} WHERE g IN $groups)
 OPTIONAL MATCH (i)-[:{Rel.AUTHORED_BY}]->(author:{Label.PERSON})
 OPTIONAL MATCH (d)-[:{Rel.SUPERSEDES}]->(old:{Label.DECISION})
-RETURN d.{Prop.ID}, d.{Prop.STATEMENT}, d.{Prop.VALID_FROM}, old.{Prop.STATEMENT},
+WITH d, e, i, author, old,
+     [(old)-[:{Rel.EVIDENCED_BY}]->(oi:{Label.ITEM})
+      WHERE oi.{Prop.MIN_LEVEL} <= $level AND ANY(g IN oi.{Prop.ACL_GROUPS} WHERE g IN $groups) | oi] AS old_evidence
+RETURN d.{Prop.ID}, d.{Prop.STATEMENT}, d.{Prop.VALID_FROM},
+       CASE WHEN size(old_evidence) > 0 THEN old.{Prop.STATEMENT} END,
        collect({{quote: e.{Prop.QUOTE}, author: author.{Prop.NAME}, url: i.{Prop.SOURCE_URL}, at: i.{Prop.OCCURRED_AT}}}) AS evidence
 ORDER BY d.{Prop.VALID_FROM} DESC
 LIMIT 1

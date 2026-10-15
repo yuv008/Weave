@@ -26,4 +26,4 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["app*", "shared*", "fixtures*"]
+include = ["app*", "shared*", "fixtures*", "agents*"]

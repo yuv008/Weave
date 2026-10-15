@@ -7,7 +7,7 @@ from fixtures.acme import Fixture
 from shared.indexes import ensure_contract_indexes
 from shared.schema import CONTRACT_LABELS, EDGE_ENDPOINTS, SOURCE_SPECIFIC_LABELS, Prop
 
-MIGRATION = Path(__file__).resolve().parent.parent / "migrations" / "001_contract.sql"
+MIGRATIONS = Path(__file__).resolve().parent.parent / "migrations"
 _ALLOWED_LABELS = set(CONTRACT_LABELS) | set(SOURCE_SPECIFIC_LABELS)
 BATCH = 200
 
@@ -68,17 +68,24 @@ def vector_literal(vector: list[float] | None) -> str | None:
     return "[" + ",".join(f"{value:.7f}" for value in vector) + "]"
 
 
-def apply_migration(conn) -> None:
-    """Run over a direct connection, never the pooled one."""
+def apply_migrations(conn) -> list[str]:
+    """Run every migration in name order over a direct connection, never the pooled one."""
 
+    applied = []
     with conn.cursor() as cur:
-        cur.execute(MIGRATION.read_text(encoding="utf-8"))
+        for path in sorted(MIGRATIONS.glob("*.sql")):
+            cur.execute(path.read_text(encoding="utf-8"))
+            applied.append(path.stem)
     conn.commit()
+    return applied
 
 
 def seed_postgres(conn, fx: Fixture, embeddings: list[list[float]] | None = None) -> dict[str, int]:
     tenant = fx.tenant
     with conn.cursor() as cur:
+        # The fixture owns its tenant: replace rows so removed memberships and items do not linger.
+        for table in ("group_membership", "source_sync", "chunk"):
+            cur.execute(f"DELETE FROM {table} WHERE tenant_id = %s", (tenant,))
         cur.executemany(
             """
             INSERT INTO group_membership (tenant_id, person_id, acl_group, source_system)
@@ -96,7 +103,10 @@ def seed_postgres(conn, fx: Fixture, embeddings: list[list[float]] | None = None
             [(tenant, s["source_id"], s["acl_group"]) for s in fx.source_sync],
         )
         cur.execute(
-            "INSERT INTO tenant_acl (tenant_id, acl_epoch) VALUES (%s, 1) ON CONFLICT DO NOTHING",
+            """
+            INSERT INTO tenant_acl (tenant_id, acl_epoch) VALUES (%s, 1)
+            ON CONFLICT (tenant_id) DO UPDATE SET acl_epoch = tenant_acl.acl_epoch + 1
+            """,
             (tenant,),
         )
         cur.executemany(

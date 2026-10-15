@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from shared.acl import SYSTEMS, parse_acl
+from shared.acl import ORG_WIDE, SYSTEMS, parse_acl
 
 DEFAULT_PATH = Path(__file__).resolve().parent.parent / "config" / "weave.yaml"
 
@@ -25,6 +25,7 @@ class SourcePolicy(BaseModel):
     min_level: int = Field(ge=0, le=3)
     cascade_policy: Literal["broadcast", "manual"]
     authority: int = Field(ge=1, le=3)
+    org_wide: bool = False
 
 
 class WeaveConfig(BaseModel):
@@ -35,6 +36,9 @@ class WeaveConfig(BaseModel):
     likely_threshold: float = Field(ge=0, le=1)
     hide_provisional: bool
     acl_stale_minutes: int = Field(gt=0)
+    hidden_sources_notice: bool = False
+    figure_stale_days: int = Field(default=30, gt=0)
+    expertise_half_life_days: int = Field(default=30, gt=0)
     authority: dict[str, int]
     sources: dict[str, SourcePolicy]
 
@@ -52,6 +56,12 @@ class WeaveConfig(BaseModel):
         for key in value:
             parse_acl(key)
         return value
+
+
+def source_acl(group: str, policy: SourcePolicy) -> list[str]:
+    """``acl_groups`` for a source and its items: its own group, plus ``org:all`` when org-wide."""
+
+    return [group, ORG_WIDE] if policy.org_wide else [group]
 
 
 def load_config(path: str | Path | None = None) -> WeaveConfig:

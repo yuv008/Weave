@@ -145,6 +145,7 @@ class Prop:
     QUOTE = "quote"
     SPAN = "span"
     SCORE = "score"
+    EVIDENCE_IDS = "evidence_ids"
 
 
 class Status:
@@ -269,9 +270,13 @@ EDGE_ENDPOINTS: dict[str, tuple[set[str], set[str]]] = {
     Rel.SUMMARIZES: ({Label.PROJECTION}, _CLAIMS),
 }
 
+DEPENDENCY_RELS = (Rel.NEEDS, Rel.DEPENDS_ON, Rel.BLOCKED_BY)
+"""Edges between work items. Each carries ``evidence_ids``: the Items that justify it."""
+
 REQUIRED_EDGE_PROPS: dict[str, tuple[str, ...]] = {
     Rel.EVIDENCED_BY: (Prop.QUOTE, Prop.SPAN, Prop.CONFIDENCE),
     Rel.KNOWS_ABOUT: (Prop.SCORE,),
+    **{rel: (Prop.EVIDENCE_IDS,) for rel in DEPENDENCY_RELS},
 }
 
 

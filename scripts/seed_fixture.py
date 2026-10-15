@@ -1,13 +1,16 @@
 """Seed the fake company into FalkorDB ``co:{tenant}`` and Postgres.
 
 Usage: python -m scripts.seed_fixture [--reset] [--skip-graph] [--skip-postgres] [--skip-embeddings]
+
+Only for the fixture tenant: the Postgres seed replaces that tenant's
+memberships, sync times and chunks.
 """
 
 import argparse
 import os
 
 from fixtures.acme import build
-from fixtures.seed import apply_migration, embed_texts, seed_graph, seed_postgres
+from fixtures.seed import apply_migrations, embed_texts, seed_graph, seed_postgres
 from shared.config import load_config
 from shared.env import load_env
 from shared.schema import company_graph
@@ -24,6 +27,8 @@ def main() -> None:
     load_env()
     cfg = load_config()
     tenant = os.environ.get("WEAVE_TENANT", cfg.tenant)
+    if tenant != cfg.tenant:
+        raise SystemExit(f"refusing to seed {tenant!r}; the fixture replaces tenant data, only {cfg.tenant!r}")
     fx = build(tenant, cfg)
 
     if not args.skip_graph:
@@ -42,10 +47,10 @@ def main() -> None:
 
     direct = connect_pg(direct=True)
     try:
-        apply_migration(direct)
+        applied = apply_migrations(direct)
     finally:
         direct.close()
-    print("migration=001_contract applied (direct connection)")
+    print(f"migrations={','.join(applied)} applied (direct connection)")
 
     embeddings = None
     if not args.skip_embeddings:

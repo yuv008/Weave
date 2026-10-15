@@ -15,6 +15,7 @@ from shared.schema import (
     CLAIM_STATUSES,
     COMMITMENT_PROGRESS,
     CONTRACT_LABELS,
+    DEPENDENCY_RELS,
     EDGE_ENDPOINTS,
     LEVELS,
     PROJECTION_STATUSES,
@@ -66,6 +67,7 @@ def validate(tenant: str, nodes: list[NodeRow], edges: list[EdgeRow]) -> list[st
         errors += _node_errors(tenant, node_id, label, node.props)
 
     out_edges: dict[str, list[EdgeRow]] = defaultdict(list)
+    pending_dependencies: list[EdgeRow] = []
     for edge in edges:
         src, dst = by_id.get(edge.src), by_id.get(edge.dst)
         if src is None or dst is None:
@@ -83,7 +85,20 @@ def validate(tenant: str, nodes: list[NodeRow], edges: list[EdgeRow]) -> list[st
                 errors.append(f"{edge.rel} {edge.src} -> {edge.dst}: missing {prop}")
         if edge.rel == Rel.EVIDENCED_BY:
             errors += _evidence_errors(edge)
+        if edge.rel in DEPENDENCY_RELS:
+            pending_dependencies.append(edge)
         out_edges[edge.src].append(edge)
+
+    for edge in pending_dependencies:
+        ids = edge.props.get(Prop.EVIDENCE_IDS)
+        if ids is None:
+            continue
+        if not isinstance(ids, list) or not ids:
+            errors.append(f"{edge.rel} {edge.src} -> {edge.dst}: evidence_ids must be a non-empty list")
+            continue
+        for item in ids:
+            if by_id.get(item, ("",))[0] != Label.ITEM:
+                errors.append(f"{edge.rel} {edge.src} -> {edge.dst}: evidence {item!r} is not an Item")
 
     for node_id, (label, props) in by_id.items():
         mine = out_edges[node_id]

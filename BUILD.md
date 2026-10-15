@@ -60,13 +60,43 @@ Agents are built against a seeded fake company while ingestion moves onto the co
 | --- | --- | --- |
 | Schema constants | `shared/schema.py` | Labels, edges, properties and statuses from the architecture doc. Existing ids and property names are kept; contract labels (`Item`, `Source`) sit next to `Message`, `Document` and `Conversation`. |
 | Ids, ACL, time | `shared/ids.py`, `shared/acl.py`, `shared/timefmt.py` | Id builders reproduce the formats above. ACL strings are `slack:C123`, `github:org/repo`, `notion:x`, `gdrive:x`, `org:all`. Timestamps are UTC at seconds precision. |
-| Config | `config/weave.yaml`, `shared/config.py` | Per-source `min_level`, `cascade_policy`, `authority`; `bge-small-en-v1.5` at 384 dimensions; `likely_threshold`; `hide_provisional`. |
+| Config | `config/weave.yaml`, `shared/config.py` | Per-source `min_level`, `cascade_policy`, `authority`, `org_wide`; `bge-small-en-v1.5` at 384 dimensions; `likely_threshold`; `hide_provisional`. Org-wide items carry their own group plus `org:all`. |
 | Postgres | `migrations/001_contract.sql` | `group_membership`, `source_sync`, `tenant_acl`, `change_event` outbox, `chunk` with `vector(384)`. |
-| Fixture | `fixtures/acme.py`, `python -m scripts.seed_fixture` | Five people, five sources, Provider A superseded by B, Acme commitment, budget figure, projections, one ChangeEvent. Graph `co:acme`. |
+| Fixture | `fixtures/acme.py`, `python -m scripts.seed_fixture` | Five people; the five matrix sources from page 15 of the architecture doc (public eng channel, eng team repo, `#eng-leads`, `#leadership`, leadership budget sheet) plus four story sources (`#eng-sso`, `#deal-acme`, Sales deals, roadmap repo). Provider A superseded by B, Acme commitment, budget figure, projections, one ChangeEvent. Graph `co:acme`. The Postgres seed replaces the tenant's memberships, sync rows and chunks, and refuses any tenant but `acme`. |
 | Validator | `python -m scripts.validate_graph` | Evidence, required properties, ACL strings, statuses, supersession, edge directions. `--fixture` runs offline. |
 | First query | `python -m scripts.query_active_decision --as sam` | Active SSO decision with the evidence Sam may see. |
 
-Open: confirm source memberships against the visibility matrix diagram, the `draft`/`approved` projection status, and whether `REPLIES_TO` stays in the contract.
+Open: whether `REPLIES_TO` stays in the contract.
+
+## Permission gate (15 October 2026)
+
+| Piece | Location | Behavior |
+| --- | --- | --- |
+| Read-only graph | `agents/graph.py` | Exposes only `ro_query`; FalkorDB rejects writes sent that way. Private graph opens only for its owner on a private surface. |
+| Principal | `agents/gate/principal.py` | Tenant, kind (person or channel), surface, level, groups, freshly synced sources, `acl_epoch`, visibility hash. |
+| Rules | `agents/gate/rules.py` | Own groups plus `org:all`; level 2+ inherits reports' groups; an item is hidden when any of its source groups has no sync within 15 minutes, including org-wide sources; channel principal takes the lowest member level. |
+| Filter | `agents/gate/visible.py` | `item_visible`, `projection_visible` (approved only), and `keep_visible_claims`, a WITH step because FalkorDB rejects `EXISTS {}` and pattern comprehensions in WHERE. Parameters: `$gate_level`, `$gate_groups`, `$gate_fresh`. |
+| Resolver | `agents/gate/resolve.py`, `agents/gate/stores.py` | Token and surface to principal. ACL snapshot from Postgres in one connection; levels and reporting lines from the graph. Errors say only "not authorized". |
+| Tokens | `migrations/002_agent_auth.sql`, `python -m scripts.issue_demo_tokens` | SHA-256 hashes only; tokens printed once. |
+| Fixture freshness | `python -m scripts.touch_sync` | Re-stamps `acme` sync times before a demo; refuses other tenants. |
+| Tests | `tests/test_gate.py`, `tests/test_gate_live.py` | The 25 cells of the page-15 matrix, 20 story-source cells, channel audience, privacy flip (Maya by DM vs. in a channel with Sam), draft projection, revocation, stale and unsynced org-wide sources, tokens, read-only. Live tests run with `WEAVE_LIVE_TESTS=1`. |
+
+## Agent tools (15 October 2026)
+
+Read-only tools from the architecture doc's tool catalogue, in `agents/tools/`. Each takes a `ToolContext` (principal from the gate, `ReadOnlyGraph`, config, clock) and never a user id or surface. Each returns node ids, citations (quote, author, date, source, link; projections as summary with the source "restricted") and the edges walked.
+
+| Tool | Behavior |
+| --- | --- |
+| `get_decision` | Active decision by topic, repo or id, or what was in force `as_of` a date. Conflicting active decisions side by side, "likely" under the threshold, the replaced decision only if visible, projection summary when no raw evidence is visible, otherwise "try search_context". |
+| `trace_decision` | Decision to evidence items, authors, sources and threads. Hidden hops are counted for the audit only. |
+| `find_owner` | `OWNS` owners plus top experts scored at query time over visible items, with recency decay. |
+| `get_figures` | Latest active figures with as-of date, sources, supersession history and a stale badge after `figure_stale_days`. |
+| `get_dependencies` | `NEEDS`, `DEPENDS_ON`, `BLOCKED_BY` up to three hops, one gated hop per query, labelled by owner department. |
+| `impact_of` | Work resting on a decision or change id, with owners to notify. The changed decision shows as restricted when the caller cannot see it. `affected_owners` (not a tool) picks recipients for the impact watcher. |
+| `dept_rollup` | Open cross-team requests, blocks and at-risk counts over visible edges only. |
+| `search_context` | Postgres full-text over chunks filtered by the gate before ranking (`migrations/003_chunk_fts.sql`), re-checked in the graph, expanded one hop. Vector search joins by reciprocal rank fusion once an embedder is set. |
+
+Contract additions: dependency edges carry `evidence_ids`; config gains `hidden_sources_notice` (off), `figure_stale_days`, `expertise_half_life_days`. Tests: `tests/test_tool_*.py` (scratch FalkorDB graph, live with `WEAVE_LIVE_TESTS=1`) and `tests/test_tools_read_only.py` (offline).
 
 ## What is not built
 

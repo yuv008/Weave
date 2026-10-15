@@ -13,6 +13,13 @@ likely_threshold: 0.7
 hide_provisional: true
 # A source whose last good ACL sync is older than this is excluded.
 acl_stale_minutes: 15
+# Tell callers how many hops or sources were hidden from them. Off: a count
+# reveals that restricted sources exist. The audit log always records it.
+hidden_sources_notice: false
+# A figure whose as_of is older than this gets a stale badge.
+figure_stale_days: 30
+# Expertise (find_owner) decays with item age; an item this old counts half.
+expertise_half_life_days: 30
 
 # Default authority by system: formal documents 3, trackers 2, chat 1.
 authority:
@@ -22,7 +29,37 @@ authority:
   slack: 1
 
 # Per-source policy, keyed by the source's ACL group string.
+# org_wide: items carry their own group plus org:all, so everyone may read
+# them while the source's own group still drives the stale-sync check.
+# The first five sources are the visibility matrix on page 15 of the
+# architecture doc; the rest carry the demo story.
 sources:
+  "slack:C0ENGPUB":
+    name: "Public eng channel"
+    min_level: 0
+    cascade_policy: manual
+    authority: 1
+    org_wide: true
+  "github:demo-org/platform":
+    name: "Eng team repo"
+    min_level: 0
+    cascade_policy: manual
+    authority: 2
+  "slack:C0ENGLEADS":
+    name: "#eng-leads"
+    min_level: 2
+    cascade_policy: manual
+    authority: 1
+  "slack:C0LEADERS":
+    name: "#leadership"
+    min_level: 2
+    cascade_policy: broadcast
+    authority: 1
+  "gdrive:F0BUDGET":
+    name: "Leadership budget sheet"
+    min_level: 3
+    cascade_policy: manual
+    authority: 3
   "slack:C0ENGSSO":
     name: "#eng-sso"
     min_level: 0
@@ -33,18 +70,14 @@ sources:
     min_level: 0
     cascade_policy: manual
     authority: 1
-  "slack:C0LEADERS":
-    name: "#leadership"
-    min_level: 2
-    cascade_policy: broadcast
-    authority: 1
-  "github:demo-org/sso-service":
-    name: "demo-org/sso-service"
-    min_level: 0
-    cascade_policy: manual
-    authority: 2
   "notion:sales-deals":
     name: "Sales deals"
     min_level: 0
     cascade_policy: manual
     authority: 3
+  "github:demo-org/roadmap":
+    name: "Roadmap issues"
+    min_level: 0
+    cascade_policy: manual
+    authority: 2
+    org_wide: true

@@ -4,9 +4,9 @@ __pycache__/
 *.pyc
 .env
 .env.local
+.env.tokens
 secrets/
-tools/
+/tools/
 logs/
 .neon
 node_modules/
-.env.local

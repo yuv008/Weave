@@ -38,6 +38,10 @@ def _cards(ctx: ToolContext, ids: list[str]) -> dict[str, dict]:
     "get_figures",
     use_when="You need a number about a project, deal or topic: budget, ARR, price, date-bound quantity.",
     dont_use_when="You need a decision (use get_decision) or people (use find_owner).",
+    args={
+        "subject": "The project, deal or topic the number is about, by name, alias or id.",
+        "name": "Optional figure name to narrow the result, e.g. 'Q4 platform budget'.",
+    },
 )
 def get_figures(ctx: ToolContext, subject: str, name: str | None = None) -> ToolResult:
     """Latest active figures the caller may see, each with as-of date, sources, history and a stale flag."""

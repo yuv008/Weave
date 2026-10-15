@@ -6,6 +6,7 @@ Every result carries node ids (so the next call starts from ids), citations
 and the edges walked (the answer card's mini graph).
 """
 
+import inspect
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -130,19 +131,44 @@ class ToolSpec:
     fn: Callable[..., ToolResult]
     use_when: str
     dont_use_when: str
+    args: dict[str, str] = field(default_factory=dict)
+    choices: dict[str, tuple[str, ...]] = field(default_factory=dict)
     mode: str = "read"
+
+    @property
+    def params(self) -> list[inspect.Parameter]:
+        """The tool's own arguments: everything after ``ctx``."""
+
+        return list(inspect.signature(self.fn).parameters.values())[1:]
 
 
 REGISTRY: dict[str, ToolSpec] = {}
 
 
-def tool(name: str, *, use_when: str, dont_use_when: str):
-    """Register a read-only tool. Descriptions follow "use when / do not use when" for MCP clients."""
+def tool(
+    name: str,
+    *,
+    use_when: str,
+    dont_use_when: str,
+    args: dict[str, str] | None = None,
+    choices: dict[str, tuple[str, ...]] | None = None,
+):
+    """Register a read-only tool. Descriptions follow "use when / do not use when" for MCP clients.
+
+    ``args`` documents every argument (checked here, so a new argument cannot
+    ship undocumented); ``choices`` lists allowed values for enum-like ones.
+    """
 
     def register(fn: Callable[..., ToolResult]) -> Callable[..., ToolResult]:
         if name in REGISTRY:
             raise ValueError(f"tool {name!r} registered twice")
-        REGISTRY[name] = ToolSpec(name, fn, use_when, dont_use_when)
+        spec = ToolSpec(name, fn, use_when, dont_use_when, dict(args or {}), dict(choices or {}))
+        names = {p.name for p in spec.params}
+        if set(spec.args) != names:
+            raise ValueError(f"tool {name!r} must document exactly its arguments {sorted(names)}")
+        if not set(spec.choices) <= names:
+            raise ValueError(f"tool {name!r} has choices for unknown arguments")
+        REGISTRY[name] = spec
         return fn
 
     return register

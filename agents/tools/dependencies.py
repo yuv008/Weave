@@ -132,6 +132,12 @@ def _root(ctx: ToolContext, ref: str) -> tuple[str | None, str | None]:
     "get_dependencies",
     use_when="You need what a deal, project, commitment or decision depends on, or what depends on it, across teams.",
     dont_use_when="You need the effect of a specific change (use impact_of) or department totals (use dept_rollup).",
+    args={
+        "entity": "A deal, project, commitment or decision, by name, alias or id.",
+        "depth": f"How many hops to walk, 1 to {MAX_DEPTH}.",
+        "direction": "'downstream' for what it depends on, 'upstream' for what depends on it, or 'both'.",
+    },
+    choices={"direction": tuple(sorted(DIRECTIONS))},
 )
 def get_dependencies(ctx: ToolContext, entity: str, depth: int = 1, direction: str = "both") -> ToolResult:
     """Neighbours over NEEDS, DEPENDS_ON and BLOCKED_BY, each node labelled by its owner's department."""
@@ -162,6 +168,12 @@ def get_dependencies(ctx: ToolContext, entity: str, depth: int = 1, direction: s
     "impact_of",
     use_when="A decision changed or was reversed and you need the commitments, deals and projects resting on it, with owners.",
     dont_use_when="You need plain neighbours of an entity (use get_dependencies).",
+    args={
+        "target": (
+            "A decision id, or a change id '{fact_id}:{kind}' where kind is one of "
+            + ", ".join(CHANGE_KINDS) + "."
+        ),
+    },
 )
 def impact_of(ctx: ToolContext, target: str) -> ToolResult:
     """Affected work up to three hops from a decision or change id (``{fact_id}:{kind}``), filtered for the caller."""
@@ -262,6 +274,10 @@ _BLOCKS_TOTAL = f"MATCH (:{Label.PROJECT})-[r:{Rel.BLOCKED_BY}]->() RETURN count
     "dept_rollup",
     use_when="You need counts of open cross-team requests, blocks and at-risk items between departments.",
     dont_use_when="You need the individual items behind a dependency (use get_dependencies).",
+    args={
+        "from_dept": "Optional requesting department, e.g. 'Sales'.",
+        "to_dept": "Optional department being asked or blocking, e.g. 'Engineering'.",
+    },
 )
 def dept_rollup(ctx: ToolContext, from_dept: str | None = None, to_dept: str | None = None) -> ToolResult:
     """Counts over visible edges only, so totals cannot leak restricted work."""

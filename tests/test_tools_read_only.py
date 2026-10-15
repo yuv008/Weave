@@ -30,10 +30,13 @@ def test_every_catalogue_tool_is_registered_read_only():
 
 def test_no_agent_module_can_write_the_graph():
     write_call = re.compile(r"(?<!ro_)\bquery\(")
+    scanned = set()
     for path in TOOLS_DIR.rglob("*.py"):
         text = path.read_text(encoding="utf-8")
         assert not write_call.search(text), f"{path} calls query()"
         assert "import falkordb" not in text and "from falkordb" not in text, path
+        scanned.add(path.relative_to(TOOLS_DIR).as_posix())
+    assert {"tools/base.py", "mcp/server.py", "mcp/__main__.py"} <= scanned
 
 
 def test_tool_context_requires_read_only_graph():

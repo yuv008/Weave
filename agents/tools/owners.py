@@ -47,6 +47,7 @@ RETURN {_ITEM_FIELDS}, '{Rel.EVIDENCED_BY}' AS via
     "find_owner",
     use_when="You need who owns a project, topic or customer, or who to ask about it.",
     dont_use_when="You need what was decided (use get_decision) or what depends on it (use get_dependencies).",
+    args={"subject": "A project, topic or customer name, alias or id, e.g. 'SSO integration' or 'Acme Corp'."},
 )
 def find_owner(ctx: ToolContext, subject: str) -> ToolResult:
     """Owners of the subject plus the top people by expertise over visible items, with evidence."""

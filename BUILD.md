@@ -98,6 +98,36 @@ Read-only tools from the architecture doc's tool catalogue, in `agents/tools/`. 
 
 Contract additions: dependency edges carry `evidence_ids`; config gains `hidden_sources_notice` (off), `figure_stale_days`, `expertise_half_life_days`. Tests: `tests/test_tool_*.py` (scratch FalkorDB graph, live with `WEAVE_LIVE_TESTS=1`) and `tests/test_tools_read_only.py` (offline).
 
+## MCP server (15 October 2026)
+
+The tools above over the Python MCP SDK (Streamable HTTP, stateless, JSON responses), in `agents/mcp/`.
+
+- **Auth:** every request carries `Authorization: Bearer <token>`. The gate resolves it on the MCP surface, which is private, so the caller is the token's owner. The tenant and graph come from the token. A missing, unknown or revoked token gets 401 "not authorized", with no other detail.
+- **Tool list:** built from the registry. Descriptions read "Use when / Do not use when", every argument is documented, and every tool is marked `readOnlyHint`. Input schemas come from the signatures, so they never offer a user, tenant or surface.
+- **Errors:** bad arguments return a tool error with a plain message. Anything else returns "internal error (request id)"; details go only to the server log.
+- **Audit:** one `audit_log` row per call (`migrations/004_audit_log.sql`), with the caller, tool, arguments, node ids, hidden count, outcome and time.
+
+Run it locally:
+
+```
+python -m scripts.issue_demo_tokens --rotate | Set-Content -Encoding ascii .env.tokens   # once; never print tokens
+python -m scripts.touch_sync --every 300                                                 # second terminal, keeps acme fresh
+python -m agents.mcp                                                                     # http://127.0.0.1:8765/mcp
+python -m scripts.mcp_flow1                                                              # the day-3 check as Sam
+```
+
+Cursor (user-level `~/.cursor/mcp.json`, never committed):
+
+```json
+{ "mcpServers": { "weave-sam": {
+    "url": "http://127.0.0.1:8765/mcp",
+    "headers": { "Authorization": "Bearer <WEAVE_TOKEN_SAM from .env.tokens>" } } } }
+```
+
+Flow 1: ask Cursor "I'm starting the SSO endpoint. Which SSO provider should I use?". It calls `get_decision` and recommends Provider B, citing Dev's `#eng-sso` message (quote, date, Slack link) and noting that it replaced Provider A. Priya's token gets the same decision with the roadmap citation only.
+
+Tests: `tests/test_mcp_server.py` (offline: auth, tool list, arguments, error masking, audit, one principal per request) and `tests/test_mcp_live.py` (real HTTP server, SDK client, scratch graph; `WEAVE_LIVE_TESTS=1`).
+
 ## What is not built
 
 - Slack OAuth install flow

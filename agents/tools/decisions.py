@@ -97,6 +97,12 @@ def _related(ctx: ToolContext, decision_id: str, result: ToolResult, *, older: b
     "get_decision",
     use_when="You need the decision the team made on a topic, API, library or repo, with who decided, when, and the evidence.",
     dont_use_when="You need numbers (use get_figures), owners (use find_owner) or free-text search (use search_context).",
+    args={
+        "topic": "What the decision is about: a topic, project, API or library name or alias, e.g. 'SSO'.",
+        "decision_id": "A decision id from an earlier result; use instead of topic to fetch one decision.",
+        "repo": "The repository you are working in, e.g. 'demo-org/platform'; used when no topic is given.",
+        "as_of": "Optional date (YYYY-MM-DD) or timestamp: return what was in force then instead of now.",
+    },
 )
 def get_decision(
     ctx: ToolContext,
@@ -198,6 +204,7 @@ RETURN d.{Prop.ID}
     "trace_decision",
     use_when="You have a decision id and need its provenance: every evidence item, its author, source and thread.",
     dont_use_when="You only need the current decision on a topic (use get_decision).",
+    args={"decision_id": "The decision id, as returned by get_decision."},
 )
 def trace_decision(ctx: ToolContext, decision_id: str) -> ToolResult:
     """Decision to evidence items to authors and threads. Hidden hops are counted, never named."""

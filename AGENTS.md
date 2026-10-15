@@ -51,6 +51,8 @@ wins.
 | Timestamp format | `shared/timefmt.py` |
 | Per-source `min_level`, `cascade_policy`, `authority`; embedding model; thresholds | `config/weave.yaml`, `shared/config.py` |
 | Postgres tables: `group_membership`, `source_sync`, `tenant_acl`, `change_event`, `chunk` | `migrations/001_contract.sql` |
+| Agents-side tables: `api_token` (hashed per-user tokens), `audit_log` (one row per tool call). Ingestion does not write them. | `migrations/002_agent_auth.sql`, `migrations/004_audit_log.sql` |
+| MCP server (read-only tools over HTTP, bearer token per user) | `agents/mcp/`, `python -m agents.mcp` |
 | Contract checker | `shared/validate.py`, `python -m scripts.validate_graph` |
 | Fake company (reference for what correct output looks like) | `fixtures/acme.py` |
 

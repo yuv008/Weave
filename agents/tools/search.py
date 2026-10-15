@@ -70,6 +70,12 @@ def _label(labels: list[str]) -> str:
     "search_context",
     use_when="Nothing more specific fits, or you need messages and documents about a free-text question.",
     dont_use_when="You need the current decision (get_decision), a number (get_figures) or owners (find_owner).",
+    args={
+        "query": "Free-text question or keywords.",
+        "system": "Optional source system to search only, e.g. 'slack' or 'github'.",
+        "limit": f"Maximum hits to return, 1 to {MAX_LIMIT}.",
+    },
+    choices={"system": tuple(SYSTEMS)},
 )
 def search_context(ctx: ToolContext, query: str, system: str | None = None, limit: int = 8) -> ToolResult:
     """Hybrid hits with citations, each expanded one hop to its claims and mentioned subjects."""

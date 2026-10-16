@@ -1,6 +1,6 @@
 # Weave build log
 
-Living record of what is actually in the repository. `AGENTS.md` is the product constitution. Connector plans: [docs/slack-plan.md](docs/slack-plan.md), [docs/notion-plan.md](docs/notion-plan.md), [docs/drive-plan.md](docs/drive-plan.md), [docs/github-plan.md](docs/github-plan.md). Ingestion flow and the 16 October live write: [docs/ingestion.md](docs/ingestion.md). This file is the status.
+Living record of what is actually in the repository. `AGENTS.md` is the product constitution. Connector plans: [docs/slack-plan.md](docs/slack-plan.md), [docs/notion-plan.md](docs/notion-plan.md), [docs/drive-plan.md](docs/drive-plan.md), [docs/github-plan.md](docs/github-plan.md). Ingestion flow and the 16 October live write: [docs/ingestion.md](docs/ingestion.md). Deploy plan: [docs/deployment.md](docs/deployment.md). This file is the status.
 
 Update this file when a slice lands or a decision changes. The Grok development prompt in `prompts/grok-session-summary.md` reads this file and refreshes the summary every 30 minutes.
 

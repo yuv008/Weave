@@ -102,6 +102,9 @@ class BearerAuth:
         if scope["type"] != "http":
             await self._app(scope, receive, send)
             return
+        if scope.get("method") == "GET" and scope.get("path") == "/health":
+            await _plain(send, 200, b"ok")
+            return
         token = _bearer(scope)
         surface = self.surface(scope.get("path", ""))
         try:

@@ -62,6 +62,10 @@ def create_app(
         github_connection_id if github_connection_id is not None else os.environ.get("GITHUB_CONNECTION_ID", "")
     )
 
+    @app.get("/health")
+    def health():
+        return {"ok": True}
+
     @app.post("/slack/events")
     async def slack_events(request: Request):
         body = await request.body()

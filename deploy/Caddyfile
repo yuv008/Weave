@@ -1,0 +1,7 @@
+{$WEBHOOK_HOST} {
+	reverse_proxy webhooks:8000
+}
+
+{$AGENT_HOST} {
+	reverse_proxy agent:8765
+}

@@ -1,0 +1,95 @@
+# App processes only. FalkorDB and Postgres stay on their existing hosts.
+# From the repo root: docker compose -f compose.deploy.yaml up --build
+
+name: weave
+
+x-env: &env
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    WEAVE_CONFIG: config/weave.yaml
+  restart: unless-stopped
+
+services:
+  webhooks:
+    <<: *env
+    build: &api
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_EMBED: "0"
+    image: weave-api
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "${WEBHOOK_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  agent:
+    <<: *env
+    image: weave-api
+    command: ["python", "-m", "agents.mcp", "--host", "0.0.0.0", "--port", "8765"]
+    depends_on:
+      webhooks:
+        condition: service_started
+    ports:
+      - "${AGENT_PORT:-8765}:8765"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  poll:
+    <<: *env
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_EMBED: "1"
+    image: weave-worker
+    command: ["python", "-m", "app.poll", "--every", "300"]
+    environment:
+      WEAVE_CONFIG: config/weave.yaml
+      GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/gdrive-service-account.json
+    volumes:
+      - type: bind
+        source: ${GOOGLE_SERVICE_ACCOUNT_FILE:-./secrets/gdrive-service-account.json}
+        target: /run/secrets/gdrive-service-account.json
+        read_only: true
+
+  watcher:
+    <<: *env
+    image: weave-worker
+    command: ["sh", "-c", "test -n \"$$WEAVE_TENANT\" && exec python -m agents.watcher --tenant \"$$WEAVE_TENANT\" --every 60"]
+    depends_on:
+      poll:
+        condition: service_started
+
+  proxy:
+    image: caddy:2
+    profiles: ["proxy"]
+    depends_on:
+      - webhooks
+      - agent
+    environment:
+      WEBHOOK_HOST: ${WEBHOOK_HOST:?set WEBHOOK_HOST to the public webhook name}
+      AGENT_HOST: ${AGENT_HOST:?set AGENT_HOST to the public agent name}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

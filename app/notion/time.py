@@ -1,13 +1,5 @@
-"""Sortable UTC timestamps for document versions."""
+"""Notion imports keep this path. The function lives in the shared helper."""
 
-from datetime import UTC, datetime
+from app.ingest.time import sortable_timestamp
 
-
-def sortable_timestamp(value: str) -> str:
-    text = value.strip()
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    parsed = datetime.fromisoformat(text)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+__all__ = ["sortable_timestamp"]

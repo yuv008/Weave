@@ -11,6 +11,7 @@ import time
 
 from app.graph.upsert import ensure_indexes, upsert_message
 from app.ingest.log import log_page
+from app.ingest.records import open_store
 from app.ingest.state import (
     channel_sync_id,
     delete_failure,
@@ -49,7 +50,9 @@ def backfill_public_channels(
     *,
     workspace_domain: str | None = None,
     incremental: bool = False,
+    store=None,
 ) -> None:
+    records = open_store(store)
     ensure_indexes(graph)
     write_connection(
         graph,
@@ -72,16 +75,18 @@ def backfill_public_channels(
                 graph=graph,
                 workspace_domain=workspace_domain,
                 incremental=incremental,
+                store=records,
             )
         cursor = _next_cursor(page)
         if not cursor:
             return
 
 
-def retry_failures(graph, client, *, workspace_domain: str | None = None) -> None:
+def retry_failures(graph, client, *, workspace_domain: str | None = None, store=None) -> None:
     """Refetch failed messages one at a time. This does not call history."""
 
-    for row in retryable_failures(graph):
+    records = open_store(store)
+    for row in retryable_failures(records):
         (
             node_id,
             tenant_id,
@@ -110,7 +115,7 @@ def retry_failures(graph, client, *, workspace_domain: str | None = None) -> Non
             upsert_message(graph, message)
         except ValueError:
             record_failure(
-                graph,
+                records,
                 node_id=node_id,
                 fields=_failure_fields(
                     tenant_id=tenant_id,
@@ -133,7 +138,7 @@ def retry_failures(graph, client, *, workspace_domain: str | None = None) -> Non
                 error_class="ValueError",
             )
             continue
-        delete_failure(graph, node_id)
+        delete_failure(records, node_id)
         log_page(
             logger,
             tenant_id=tenant_id,
@@ -156,9 +161,10 @@ def _sync_channel(
     graph,
     workspace_domain: str | None,
     incremental: bool,
+    store,
 ) -> None:
     sync_id = channel_sync_id(tenant_id, workspace_id, channel_id)
-    state = read_channel_sync(graph, sync_id)
+    state = read_channel_sync(store, sync_id)
     if state["status"] == "complete" and not incremental:
         return
     cursor = "" if incremental and state["status"] == "complete" else state["history_cursor"]
@@ -204,6 +210,7 @@ def _sync_channel(
                 graph=graph,
                 workspace_domain=workspace_domain,
                 follow_replies=True,
+                store=store,
             )
         except Exception as exc:
             log_page(
@@ -236,7 +243,7 @@ def _sync_channel(
         next_cursor = _next_cursor(page)
         finished = next_cursor == ""
         write_channel_sync(
-            graph,
+            store,
             sync_id=sync_id,
             fields={
                 "tenant_id": tenant_id,
@@ -275,9 +282,10 @@ def _sync_replies(
     client,
     graph,
     workspace_domain: str | None,
+    store,
 ) -> bool:
     sync_id = thread_sync_id(tenant_id, workspace_id, channel_id, parent_ts)
-    cursor = read_thread_sync(graph, sync_id)["replies_cursor"]
+    cursor = read_thread_sync(store, sync_id)["replies_cursor"]
     while True:
         started = time.perf_counter()
         page = client.replies(channel_id, parent_ts, cursor or None)
@@ -292,6 +300,7 @@ def _sync_replies(
             graph=graph,
             workspace_domain=workspace_domain,
             follow_replies=False,
+            store=store,
         )
         if blocked:
             log_page(
@@ -307,7 +316,7 @@ def _sync_replies(
             return True
         next_cursor = _next_cursor(page)
         write_thread_sync(
-            graph,
+            store,
             sync_id=sync_id,
             fields={
                 "tenant_id": tenant_id,
@@ -345,12 +354,13 @@ def _ingest_page(
     graph,
     workspace_domain: str | None,
     follow_replies: bool,
+    store,
 ) -> bool:
     accepted: list[dict] = []
     for raw in messages:
         if not isinstance(raw, dict):
             _remember_malformed(
-                graph,
+                store,
                 tenant_id=tenant_id,
                 connection_id=connection_id,
                 workspace_id=workspace_id,
@@ -367,6 +377,7 @@ def _ingest_page(
             channel_id=channel_id,
             graph=graph,
             workspace_domain=workspace_domain,
+            store=store,
         )
         if outcome == "blocked":
             return True
@@ -384,6 +395,7 @@ def _ingest_page(
                     client=client,
                     graph=graph,
                     workspace_domain=workspace_domain,
+                    store=store,
                 )
                 if blocked:
                     return True
@@ -399,10 +411,11 @@ def _ingest_one(
     channel_id: str,
     graph,
     workspace_domain: str | None,
+    store,
 ) -> str:
     ts = _message_ts(raw)
     node = failure_id(tenant_id, channel_id, ts or "missing")
-    if failure_attempts(graph, node) >= _MAX_FAILURES:
+    if failure_attempts(store, node) >= _MAX_FAILURES:
         return "skipped"
     try:
         message = normalize_slack_message(
@@ -416,7 +429,7 @@ def _ingest_one(
         )
     except ValueError:
         _remember_malformed(
-            graph,
+            store,
             tenant_id=tenant_id,
             connection_id=connection_id,
             workspace_id=workspace_id,
@@ -428,14 +441,14 @@ def _ingest_one(
     if message is None:
         raise RuntimeError("public backfill produced an empty message")
     upsert_message(graph, message)
-    delete_failure(graph, node)
+    delete_failure(store, node)
     return "ok"
 
 
-def _remember_malformed(graph, *, tenant_id, connection_id, workspace_id, channel_id, raw, workspace_domain):
+def _remember_malformed(store, *, tenant_id, connection_id, workspace_id, channel_id, raw, workspace_domain):
     ts = _message_ts(raw) or "missing"
     record_failure(
-        graph,
+        store,
         node_id=failure_id(tenant_id, channel_id, ts),
         fields=_failure_fields(
             tenant_id=tenant_id,

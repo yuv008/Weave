@@ -34,8 +34,8 @@ def _message(**overrides) -> CanonicalMessage:
         "tenant_id": "tenant1",
         "connection_id": "conn1",
         "workspace_id": "T1",
-        "external_id": "C1:1403051575.000407",
-        "conversation_external_id": "C1",
+        "external_id": "C0ENGSSO:1403051575.000407",
+        "conversation_external_id": "C0ENGSSO",
         "author_external_id": "U1",
         "occurred_at": datetime(2014, 6, 18, 1, 39, 35, 407, tzinfo=UTC),
         "version": format_slack_version("1403051575.000407"),
@@ -162,7 +162,7 @@ def test_equal_version_refreshes_edges_without_changing_text(graph):
 def test_reply_before_parent_creates_a_placeholder_that_is_filled(graph):
     parent = _message(excerpt="parent body")
     reply = _message(
-        external_id="C1:1403051576.000100",
+        external_id="C0ENGSSO:1403051576.000100",
         author_external_id="U2",
         excerpt="reply body",
         version=format_slack_version("1403051576.000100"),
@@ -177,7 +177,7 @@ def test_reply_before_parent_creates_a_placeholder_that_is_filled(graph):
     )
     assert placeholder is True
     assert placeholder_version == ""
-    assert placeholder_excerpt is None
+    assert placeholder_excerpt == ""
 
     upsert_message(graph, parent)
     excerpt, version, placeholder, _, count = _properties(graph, parent.node_id)

@@ -6,7 +6,7 @@ from app.models.canonical import CanonicalMessage
 from app.slack.normalize import format_slack_version
 
 TENANT = "tenant1"
-CHANNEL = "C1"
+CHANNEL = "C0ENGSSO"
 
 
 def _message(excerpt: str, ts: str, *, deleted: bool = False) -> CanonicalMessage:
@@ -21,7 +21,7 @@ def _message(excerpt: str, ts: str, *, deleted: bool = False) -> CanonicalMessag
         version=format_slack_version(ts),
         excerpt="" if deleted else excerpt,
         content_hash="ab" * 32,
-        source_url="" if deleted else f"https://acme.slack.com/archives/C1/p{ts}",
+        source_url="" if deleted else f"https://acme.slack.com/archives/{CHANNEL}/p{ts}",
         deleted=deleted,
     )
 
@@ -39,7 +39,7 @@ def test_deleted_excerpt_is_absent_and_the_live_hit_keeps_its_url(graph):
     answer = answer_channel_question(graph, TENANT, CHANNEL, "annual plan")
 
     assert len(answer.citations) == 1
-    assert answer.citations[0].source_url == "https://acme.slack.com/archives/C1/p20"
+    assert answer.citations[0].source_url == f"https://acme.slack.com/archives/{CHANNEL}/p20"
     assert "annual plan stays" in answer.text
     assert "annual plan secret" not in answer.text
     assert answer.citations[0].source_url in answer.text

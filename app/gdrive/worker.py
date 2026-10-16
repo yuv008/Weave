@@ -9,43 +9,12 @@ from app.gdrive.normalize import normalize_drive_file
 from app.graph.upsert import ensure_indexes
 from app.graph.upsert_document import upsert_document
 from app.ingest.log import format_document_log
-from app.ingest.state import failure_attempts, write_connection
+from app.ingest.records import SYNC_FAILURE, SYNC_STATE, open_store
+from app.ingest.state import failure_attempts, record_failure, write_connection
 from app.notion.time import sortable_timestamp
 
 logger = logging.getLogger("weave.gdrive")
 _MAX_FAILURES = 5
-
-_READ = """
-MATCH (s:SyncState {id: $id})
-RETURN s.page_token, s.modified_after, s.status
-"""
-
-_WRITE = """
-MERGE (s:SyncState {id: $id})
-SET s.tenant_id = $tenant_id,
-    s.connection_id = $connection_id,
-    s.folder_id = $folder_id,
-    s.workspace_id = $folder_id,
-    s.source = 'gdrive',
-    s.page_token = $page_token,
-    s.modified_after = $modified_after,
-    s.status = $status,
-    s.last_error_class = $last_error_class,
-    s.updated_at = $updated_at
-"""
-
-_FAILURE = """
-MERGE (f:SyncFailure {id: $id})
-ON CREATE SET f.attempts = 0
-SET f.attempts = coalesce(f.attempts, 0) + 1,
-    f.error_class = $error_class,
-    f.tenant_id = $tenant_id,
-    f.connection_id = $connection_id,
-    f.folder_id = $folder_id,
-    f.file_id = $file_id,
-    f.updated_at = $updated_at
-RETURN f.attempts
-"""
 
 
 def drive_sync_id(tenant_id: str, folder_id: str) -> str:
@@ -56,7 +25,8 @@ def drive_failure_id(tenant_id: str, file_id: str) -> str:
     return f"{tenant_id}:gdrive:failure:{file_id}"
 
 
-def poll_folder(tenant_id: str, connection_id: str, folder_id: str, client, graph) -> None:
+def poll_folder(tenant_id: str, connection_id: str, folder_id: str, client, graph, store=None) -> None:
+    records = open_store(store)
     ensure_indexes(graph)
     write_connection(
         graph,
@@ -66,7 +36,7 @@ def poll_folder(tenant_id: str, connection_id: str, folder_id: str, client, grap
         source="gdrive",
     )
     sync_id = drive_sync_id(tenant_id, folder_id)
-    state = _read(graph, sync_id)
+    state = _read(records, sync_id)
     token = state["page_token"]
     watermark = state["modified_after"]
     greatest = watermark
@@ -80,7 +50,7 @@ def poll_folder(tenant_id: str, connection_id: str, folder_id: str, client, grap
                 if not isinstance(raw, dict) or raw.get("mimeType") != DOC_MIME:
                     continue
                 modified = raw.get("modifiedTime")
-                outcome = _ingest(raw, tenant_id, connection_id, folder_id, client, graph)
+                outcome = _ingest(raw, tenant_id, connection_id, folder_id, client, graph, records)
                 if outcome == "blocked":
                     failed = 1
                     break
@@ -108,7 +78,7 @@ def poll_folder(tenant_id: str, connection_id: str, folder_id: str, client, grap
             next_token = ""
         finished = next_token == ""
         _write(
-            graph,
+            records,
             sync_id,
             {
                 "tenant_id": tenant_id,
@@ -136,14 +106,22 @@ def poll_folder(tenant_id: str, connection_id: str, folder_id: str, client, grap
         token = next_token
 
 
-def retry_drive_failures(graph, client) -> None:
-    rows = graph.query(
-        """
-        MATCH (f:SyncFailure)
-        WHERE f.file_id IS NOT NULL AND coalesce(f.attempts, 0) < 5
-        RETURN f.id, f.tenant_id, f.connection_id, f.folder_id, f.file_id
-        """
-    ).result_set
+def retry_drive_failures(graph, client, store=None) -> None:
+    records = open_store(store)
+    rows = []
+    for row in records.list_kind(SYNC_FAILURE):
+        payload = row["payload"]
+        if not payload.get("file_id") or int(payload.get("attempts") or 0) >= 5:
+            continue
+        rows.append(
+            (
+                row["id"],
+                payload.get("tenant_id"),
+                payload.get("connection_id"),
+                payload.get("folder_id"),
+                payload.get("file_id"),
+            )
+        )
     for node_id, tenant_id, connection_id, folder_id, file_id in rows:
         try:
             metadata = client.get_file(file_id)
@@ -159,15 +137,15 @@ def retry_drive_failures(graph, client) -> None:
                 raise ValueError("not a document")
             upsert_document(graph, document)
         except ValueError:
-            _remember(graph, tenant_id, connection_id, folder_id, file_id, "ValueError")
+            _remember(records, tenant_id, connection_id, folder_id, file_id, "ValueError")
             continue
-        graph.query("MATCH (f:SyncFailure {id: $id}) DELETE f", {"id": node_id})
+        records.delete(node_id)
 
 
-def _ingest(raw, tenant_id, connection_id, folder_id, client, graph) -> str:
+def _ingest(raw, tenant_id, connection_id, folder_id, client, graph, store) -> str:
     file_id = raw.get("id") if isinstance(raw.get("id"), str) else ""
     failure = drive_failure_id(tenant_id, file_id or "missing")
-    if failure_attempts(graph, failure) >= _MAX_FAILURES:
+    if failure_attempts(store, failure) >= _MAX_FAILURES:
         return "skipped"
     try:
         text = "" if raw.get("trashed") else client.export_document(file_id)
@@ -179,40 +157,41 @@ def _ingest(raw, tenant_id, connection_id, folder_id, client, graph) -> str:
             folder_id=folder_id,
         )
     except ValueError:
-        _remember(graph, tenant_id, connection_id, folder_id, file_id, "ValueError")
+        _remember(store, tenant_id, connection_id, folder_id, file_id, "ValueError")
         return "blocked"
     if document is None:
         return "skipped"
     upsert_document(graph, document)
-    graph.query("MATCH (f:SyncFailure {id: $id}) DELETE f", {"id": failure})
+    store.delete(failure)
     return "ok"
 
 
-def _remember(graph, tenant_id, connection_id, folder_id, file_id, error_class) -> None:
-    graph.query(
-        _FAILURE,
-        {
-            "id": drive_failure_id(tenant_id, file_id or "missing"),
+def _remember(store, tenant_id, connection_id, folder_id, file_id, error_class) -> None:
+    record_failure(
+        store,
+        node_id=drive_failure_id(tenant_id, file_id or "missing"),
+        fields={
             "error_class": error_class,
             "tenant_id": tenant_id,
             "connection_id": connection_id,
             "folder_id": folder_id,
             "file_id": file_id,
-            "updated_at": datetime.now(UTC).isoformat(),
         },
     )
 
 
-def _read(graph, sync_id: str) -> dict[str, str]:
-    rows = graph.query(_READ, {"id": sync_id}).result_set
-    if not rows:
-        return {"page_token": "", "modified_after": "", "status": ""}
-    token, watermark, status = rows[0]
-    return {"page_token": token or "", "modified_after": watermark or "", "status": status or ""}
+def _read(store, sync_id: str) -> dict[str, str]:
+    row = store.get(sync_id)
+    payload = row["payload"] if row else {}
+    return {
+        "page_token": payload.get("page_token") or "",
+        "modified_after": payload.get("modified_after") or "",
+        "status": payload.get("status") or "",
+    }
 
 
-def _write(graph, sync_id: str, fields: dict[str, str]) -> None:
-    graph.query(_WRITE, {"id": sync_id, **fields, "updated_at": datetime.now(UTC).isoformat()})
+def _write(store, sync_id: str, fields: dict[str, str]) -> None:
+    store.merge(sync_id, fields.get("tenant_id", ""), SYNC_STATE, fields)
 
 
 def _elapsed(started: float) -> int:

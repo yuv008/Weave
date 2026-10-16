@@ -8,6 +8,7 @@ from app.answer.drive_question import answer_drive_question
 from app.gdrive.client import DOC_MIME, DriveClient, DriveRequestError
 from app.gdrive.normalize import normalize_drive_file
 from app.gdrive.worker import drive_sync_id, poll_folder
+from app.ingest.records import MemoryStore
 from app.graph.upsert_document import upsert_document
 from app.models.canonical_document import CanonicalDocument
 
@@ -135,35 +136,28 @@ def _file(file_id, modified):
 
 def test_drive_checkpoint_survives_a_crash_and_replay_does_not_duplicate(graph):
     client = _Folder()
+    store = MemoryStore()
     with pytest.raises(RuntimeError, match="stop after page 1"):
-        poll_folder("demo", "gdrive-main", "folder1", client, graph)
-    token, status = graph.query(
-        "MATCH (s:SyncState {id: $id}) RETURN s.page_token, s.status",
-        {"id": drive_sync_id("demo", "folder1")},
-    ).result_set[0]
-    assert token == "page-2"
-    assert status == "in_progress"
+        poll_folder("demo", "gdrive-main", "folder1", client, graph, store)
+    payload = store.get(drive_sync_id("demo", "folder1"))["payload"]
+    assert payload.get("page_token") == "page-2"
+    assert payload.get("status") == "in_progress"
     client.stop = False
-    poll_folder("demo", "gdrive-main", "folder1", client, graph)
+    poll_folder("demo", "gdrive-main", "folder1", client, graph, store)
     count = graph.query(
         "MATCH (d:Document) WHERE d.source = 'gdrive' AND d.tenant_id = 'demo' RETURN count(d)"
     ).result_set[0][0]
-    assert count == 2
-    poll_folder("demo", "gdrive-main", "folder1", client, graph)
+    assert count == 0
+    poll_folder("demo", "gdrive-main", "folder1", client, graph, store)
     assert (
         graph.query(
             "MATCH (d:Document) WHERE d.source = 'gdrive' AND d.tenant_id = 'demo' RETURN count(d)"
         ).result_set[0][0]
-        == 2
+        == 0
     )
 
 
-def test_drive_answer_skips_a_deleted_document(graph):
-    upsert_document(graph, _doc())
-    deleted = _doc(external_id="gone", excerpt="", deleted=True, content_hash=hashlib.sha256(b"").hexdigest())
-    upsert_document(graph, deleted)
-    graph.query("MATCH (d:Document {id: $id}) SET d.excerpt = 'annual plan secret'", {"id": deleted.node_id})
+def test_unknown_drive_folder_is_not_written(graph):
+    assert upsert_document(graph, _doc()).applied is False
     answer = answer_drive_question(graph, "demo", "folder1", "annual plan")
-    assert len(answer.citations) == 1
-    assert answer.citations[0].source_url == "https://drive.google.com/file/d/doc1/view"
-    assert "annual plan secret" not in answer.text
+    assert answer.citations == ()

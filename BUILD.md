@@ -1,20 +1,20 @@
 # Weave build log
 
-Living record of what is actually in the repository. `AGENTS.md` is the product constitution. Connector plans: [docs/slack-plan.md](docs/slack-plan.md), [docs/notion-plan.md](docs/notion-plan.md), [docs/drive-plan.md](docs/drive-plan.md). This file is the status.
+Living record of what is actually in the repository. `AGENTS.md` is the product constitution. Connector plans: [docs/slack-plan.md](docs/slack-plan.md), [docs/notion-plan.md](docs/notion-plan.md), [docs/drive-plan.md](docs/drive-plan.md), [docs/github-plan.md](docs/github-plan.md). This file is the status.
 
 Update this file when a slice lands or a decision changes. The Grok development prompt in `prompts/grok-session-summary.md` reads this file and refreshes the summary every 30 minutes.
 
 ## Latest summary
 
-- **As of:** 14 October 2026
-- **Built:** Public Slack, Notion, and Google Drive are connected for this demo. Slack includes a live delete tombstone. Drive has one Google Doc in FalkorDB. Notion has one shared page: it has a source URL, a `HAS_SOURCE` edge, and a title. The page body hash is empty, so the excerpt is empty.
-- **Not built:** OAuth, a web UI, and a model-backed answer.
-- **Next step:** Add a paragraph to the shared Notion page and poll again if a cited answer should quote that page. Full message and document bodies are still not stored.
-- **Open:** Where full message bodies live. Sync state is a temporary FalkorDB `SyncState` node.
+- **As of:** 15 October 2026
+- **Built:** Public Slack, Notion, and Google Drive are connected for this demo. New connector writes go to `co:{WEAVE_TENANT}` and only for sources listed in `config/weave.yaml`. Slack messages are `:Message:Item` with `IN_SOURCE` and `AUTHORED_BY`. GitHub issues use the shared issue id and the `Issue` label. `POST /slack/decisions` merges one `Decision` per matching message. `SyncState`, `SyncFailure`, and `SlackEvent` are Postgres `ingest_record` rows. Person nodes still lack `name`, `email`, `level`, and `dept`. `AUTHORED` and `CONTAINS` remain, so `validate_graph` does not report `errors=0`.
+- **Not built:** OAuth, a web UI, and a model-backed answer. GitHub file contents, diffs, and review threads are out of scope. `Commitment`, `Figure`, supersede, and projections are not built. The live demo channel is not in `config/weave.yaml`, so it is not written.
+- **Next step:** Both builders add the live Slack channel to `config/weave.yaml` if that workspace should be ingested. Full message and document bodies are still not stored.
+- **Open:** Where full message bodies live. Person email, level, and dept are still missing, so the validator reports those people.
 
 ## Decisions
 
-- FalkorDB and FastAPI are the working choices. FastAPI serves `POST /slack/events`.
+- FalkorDB and FastAPI are the working choices. FastAPI serves `POST /slack/events` and `POST /slack/decisions`. The decisions route merges a caller-supplied statement onto each matching message and does not supersede.
 - Nango is not chosen. Slack is called directly. The bot token comes from the environment. There is no OAuth install flow yet.
 - Groq, named in `AGENTS.md`, is not chosen. Grok is a development partner, not the product runtime.
 - The first connector is Slack, and only public channels. Private channels, group DMs, and DMs are skipped.
@@ -27,6 +27,7 @@ Update this file when a slice lands or a decision changes. The Grok development 
 - Deletes blank the excerpt and leave the edges. Earlier versions are not kept.
 - The Slack code path has run against the connected demo workspace. Human `message.channels` delivery and a later delete were both confirmed on the same public-channel message. The workspace id stays in `.env`.
 - Notion and Drive call their APIs directly. Notion users and Drive owners are not merged into Slack `Person` nodes. `NOTION_VERSION` is `2026-03-11`.
+- GitHub calls the REST API directly at version `2026-03-10`. One repository. Issues and pull requests, plus issue comments, are `Document` nodes. File contents are not read. No live GitHub write has been confirmed. See `docs/github-plan.md`.
 
 ## What is built
 
@@ -44,13 +45,15 @@ Update this file when a slice lands or a decision changes. The Grok development 
 | Page logs | `app/ingest/log.py` | Tenant, workspace, channel, counts, duration, and error class. Message text and tokens are dropped. |
 | Events | `app/main.py`, `app/slack/events.py` | `POST /slack/events` checks the Slack signature before reading the command. Public channel type `channel` is accepted. Deletes blank the excerpt and keep edges. |
 | Cited answer | `app/answer/channel_question.py` | Excerpt matches for one public channel, newest first, limit 20. Deleted and placeholder messages are excluded. No model call. |
-| Canonical document | `app/models/canonical_document.py`, `app/graph/upsert_document.py` | Shared by Notion and Drive. Hash, 280-character prefix, and URL. Equal version keeps the excerpt. Older versions do not write. |
+| Slack decisions | `app/answer/decision.py`, `POST /slack/decisions` | Caller supplies one statement and one quote. Up to 20 matches come back as JSON. The quote must sit in the excerpt. No `Decision` node is written. |
+| Canonical document | `app/models/canonical_document.py`, `app/graph/upsert_document.py` | Shared by Notion, Drive, and GitHub. Hash, 280-character prefix, and URL. Equal version keeps the excerpt. Older versions do not write. A GitHub comment may create a placeholder issue. |
 | Notion connector | `app/notion/` | REST client, block text, poll of shared pages, tombstones for `in_trash`. |
 | Drive connector | `app/gdrive/`, `scripts/check_drive_access.py` | Read-only service account. Google Docs in one folder. Other MIME types are skipped. |
-| Document answers | `app/answer/notion_question.py`, `app/answer/drive_question.py` | Excerpt matches with source URLs. Deleted documents are excluded. No model call. |
-| Tests | `tests/test_normalize.py`, `tests/test_upsert.py`, `tests/test_slack_client.py`, `tests/test_worker.py`, `tests/test_events.py`, `tests/test_answer.py`, `tests/test_log.py`, `tests/test_notion.py`, `tests/test_drive.py` | Checkpoint order, thread resume, stale versions, rejected signatures, tombstones, and cited answers for Slack, Notion, and Drive. |
+| Document answers | `app/answer/notion_question.py`, `app/answer/drive_question.py`, `app/answer/github_question.py` | Excerpt matches with source URLs. Deleted documents are excluded. No model call. |
+| GitHub connector | `app/github/`, `scripts/check_github_access.py` | One repository. Issues, pull requests, and issue comments. Poll watermark, failure retry, and signed `POST /github/webhook`. No live write yet. |
+| Tests | `tests/test_normalize.py`, `tests/test_upsert.py`, `tests/test_slack_client.py`, `tests/test_worker.py`, `tests/test_events.py`, `tests/test_answer.py`, `tests/test_log.py`, `tests/test_notion.py`, `tests/test_drive.py`, `tests/test_github.py` | Checkpoint order, thread resume, stale versions, rejected signatures, tombstones, and cited answers for Slack, Notion, Drive, and GitHub. |
 
-Local check on 14 October 2026: `53 passed`. FalkorDB ran in Docker container `weave-falkordb`, host port `6380`. `.env.example` defaults the port to `6379`. Use `FALKORDB_PORT=6380` for that container.
+Local check on 15 October 2026: `66 passed`. FalkorDB ran in Docker container `weave-falkordb`, host port `6380`. `.env.example` defaults the port to `6379`. Use `FALKORDB_PORT=6380` for that container.
 
 ## Shared contract and fake graph (15 October 2026)
 
@@ -238,6 +241,7 @@ Tests:
 - Live Slack sending has not run against a real tenant (the watcher's `send: slack` path is tested with a stubbed HTTP client only)
 - A retry limit for an event that keeps failing (it is logged, audited as `error` and retried every tick)
 - A web UI and per-user ACLs
+- A live GitHub write. The connector code is in the repo. `scripts/check_github_access.py` has not been run against a token.
 
 ## Connected sources
 

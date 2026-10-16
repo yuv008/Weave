@@ -15,7 +15,7 @@ SECRET = "signing-secret"
 TENANT = "tenant1"
 CONNECTION = "conn1"
 WORKSPACE = "T1"
-CHANNEL = "C1"
+CHANNEL = "C0ENGSSO"
 
 
 def _sign(body: bytes, timestamp: str) -> str:
@@ -62,7 +62,7 @@ def _seed(graph, excerpt: str, version_ts: str):
         version=format_slack_version(version_ts),
         excerpt=excerpt,
         content_hash="a" * 64,
-        source_url="https://acme.slack.com/archives/C1/p101",
+        source_url=f"https://acme.slack.com/archives/{CHANNEL}/p101",
     )
     upsert_message(graph, message)
 

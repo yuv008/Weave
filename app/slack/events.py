@@ -11,6 +11,7 @@ import logging
 from datetime import UTC, datetime
 
 from app.graph.upsert import upsert_message
+from app.ingest.records import open_store
 from app.ingest.state import event_already_applied, mark_event_applied
 from app.models.canonical import conversation_node_id
 from app.slack.normalize import PUBLIC_CHANNEL, normalize_slack_message
@@ -52,7 +53,9 @@ def apply_slack_event(
     connection_id: str,
     workspace_id: str,
     workspace_domain: str | None = None,
+    store=None,
 ) -> dict:
+    records = open_store(store)
     if payload.get("type") == "url_verification":
         challenge = payload.get("challenge")
         return {"challenge": challenge if isinstance(challenge, str) else ""}
@@ -66,7 +69,7 @@ def apply_slack_event(
         logger.info("slack_event_skip channel_id=%s", channel_id)
         return {"ok": True}
     event_id = payload.get("event_id") if isinstance(payload.get("event_id"), str) else ""
-    if event_already_applied(graph, event_id):
+    if event_already_applied(records, event_id):
         return {"ok": True}
     message = normalize_slack_message(
         event,
@@ -80,7 +83,7 @@ def apply_slack_event(
     if message is None:
         return {"ok": True}
     upsert_message(graph, message, now=datetime.now(UTC))
-    mark_event_applied(graph, event_id, tenant_id)
+    mark_event_applied(records, event_id, tenant_id)
     return {"ok": True}
 
 

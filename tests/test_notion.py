@@ -10,6 +10,7 @@ from app.models.canonical_document import CanonicalDocument
 from app.notion.blocks import plain_text_from_blocks
 from app.notion.client import NotionClient, NotionRequestError
 from app.notion.normalize import normalize_notion_page
+from app.ingest.records import MemoryStore
 from app.notion.worker import notion_sync_id, poll_shared_pages
 
 TOKEN = "secret-notion-token"
@@ -116,7 +117,7 @@ def _document(**overrides) -> CanonicalDocument:
         "tenant_id": "demo",
         "connection_id": "notion-main",
         "source": "notion",
-        "workspace_id": "ws",
+        "workspace_id": "sales-deals",
         "external_id": "page-1",
         "title": "Plan",
         "occurred_at": datetime(2026, 1, 1, tzinfo=UTC),
@@ -191,23 +192,21 @@ class _Search:
 
 def test_notion_checkpoint_survives_a_crash_and_replay_does_not_duplicate(graph):
     client = _Search()
+    store = MemoryStore()
     with pytest.raises(RuntimeError, match="stop after page 1"):
-        poll_shared_pages("demo", "notion-main", "ws", client, graph)
-    cursor, watermark, status = graph.query(
-        "MATCH (s:SyncState {id: $id}) RETURN s.search_cursor, s.last_edited_after, s.status",
-        {"id": notion_sync_id("demo", "ws")},
-    ).result_set[0]
-    assert cursor == "page-2"
-    assert watermark in ("", None)
-    assert status == "in_progress"
+        poll_shared_pages("demo", "notion-main", "sales-deals", client, graph, store)
+    payload = store.get(notion_sync_id("demo", "sales-deals"))["payload"]
+    assert payload.get("search_cursor") == "page-2"
+    assert payload.get("last_edited_after") in ("", None)
+    assert payload.get("status") == "in_progress"
     client.stop = False
-    poll_shared_pages("demo", "notion-main", "ws", client, graph)
+    poll_shared_pages("demo", "notion-main", "sales-deals", client, graph, store)
     count = graph.query(
         "MATCH (d:Document) WHERE d.tenant_id = 'demo' AND d.source = 'notion' RETURN count(d)"
     ).result_set[0][0]
     assert count == 2
     calls = len(client.calls)
-    poll_shared_pages("demo", "notion-main", "ws", client, graph)
+    poll_shared_pages("demo", "notion-main", "sales-deals", client, graph, store)
     assert len(client.calls) > calls
     assert (
         graph.query(

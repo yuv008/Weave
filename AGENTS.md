@@ -7,7 +7,8 @@
 
 ## Current build
 
-As of 14 October 2026 the demo has three direct connectors. Nango is not
+As of 15 October 2026 the demo has three live connectors, plus a GitHub
+connector that is implemented and not yet confirmed live. Nango is not
 used. The scope is a single tenant and is not permission-safe.
 
 -   **Slack:** public channels only. Backfill, checkpoints, thread
@@ -20,9 +21,12 @@ used. The scope is a single tenant and is not permission-safe.
 -   **Google Drive:** read-only service account, Google Docs in one
     shared folder. One live Doc is stored. `requests` is required
     because `google-auth` uses it.
+-   **GitHub:** one repository, issues, pull requests, and issue
+    comments. The code is in `app/github/`. No live write yet. File
+    contents are not read.
 
-Full bodies stay out of the graph. Notion users and Drive owners are
-not merged into Slack `Person` nodes. There is no OAuth install flow,
+Full bodies stay out of the graph. Notion users, Drive owners, and
+GitHub logins are not merged into Slack `Person` nodes. There is no OAuth install flow,
 web UI, or model-backed answer yet.
 
 ## Shared contract: ingestion and agents (read first)

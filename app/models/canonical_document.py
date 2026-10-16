@@ -9,6 +9,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.canonical import EXCERPT_LIMIT
+from shared.ids import document_id, github_issue_id
 
 
 def document_node_id(tenant_id: str, source: str, workspace_id: str, external_id: str) -> str:
@@ -34,6 +35,11 @@ class CanonicalDocument(BaseModel):
     excerpt: str = Field(default="", max_length=EXCERPT_LIMIT)
     content_hash: str
     visibility: str = "demo_single_tenant"
+    kind: str = ""
+    status: str = ""
+    author_external_id: str = ""
+    parent_external_id: str | None = None
+    repo_slug: str = ""
 
     @field_validator("tenant_id", "connection_id")
     @classmethod
@@ -45,8 +51,8 @@ class CanonicalDocument(BaseModel):
     @field_validator("source")
     @classmethod
     def _source(cls, value: str) -> str:
-        if value not in {"notion", "gdrive"}:
-            raise ValueError("document source must be notion or gdrive")
+        if value not in {"notion", "gdrive", "github"}:
+            raise ValueError("document source must be notion, gdrive, or github")
         return value
 
     @field_validator("visibility")
@@ -63,6 +69,27 @@ class CanonicalDocument(BaseModel):
             raise ValueError("content_hash must be a sha256 hex digest")
         return value
 
+    @field_validator("kind")
+    @classmethod
+    def _kind(cls, value: str) -> str:
+        if value not in {"", "issue", "pull_request", "comment"}:
+            raise ValueError("kind is invalid")
+        return value
+
+    @field_validator("status")
+    @classmethod
+    def _status(cls, value: str) -> str:
+        if value not in {"", "open", "closed", "merged"}:
+            raise ValueError("status is invalid")
+        return value
+
+    @field_validator("parent_external_id")
+    @classmethod
+    def _parent(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        return value
+
     @field_validator("workspace_id", "external_id", "version")
     @classmethod
     def _required(cls, value: str) -> str:
@@ -72,4 +99,22 @@ class CanonicalDocument(BaseModel):
 
     @property
     def node_id(self) -> str:
+        if self.source == "github" and self.repo_slug and self.kind in {"issue", "pull_request"}:
+            return github_issue_id(self.tenant_id, self.repo_slug, _issue_number(self.external_id))
+        if self.source == "github" and self.repo_slug and self.kind == "comment":
+            return document_id(self.tenant_id, "github", self.repo_slug, self.external_id)
         return document_node_id(self.tenant_id, self.source, self.workspace_id, self.external_id)
+
+    @property
+    def parent_node_id(self) -> str | None:
+        if not self.parent_external_id:
+            return None
+        if self.source == "github" and self.repo_slug and self.parent_external_id.startswith("issue:"):
+            return github_issue_id(self.tenant_id, self.repo_slug, _issue_number(self.parent_external_id))
+        return document_node_id(
+            self.tenant_id, self.source, self.workspace_id, self.parent_external_id
+        )
+
+
+def _issue_number(external_id: str) -> int:
+    return int(external_id.split(":", 1)[1])

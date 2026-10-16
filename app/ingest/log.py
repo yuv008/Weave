@@ -38,5 +38,16 @@ def format_document_log(**fields: object) -> str:
     return " ".join(parts)
 
 
+def format_github_log(**fields: object) -> str:
+    keys = ("tenant_id", "repo_id", "records", "failed", "duration_ms", "error_class")
+    parts: list[str] = []
+    for key in keys:
+        value = fields.get(key, "")
+        if value is None:
+            value = ""
+        parts.append(f"{key}={value}")
+    return " ".join(parts)
+
+
 def log_page(logger: logging.Logger, **fields: object) -> None:
     logger.info("%s", format_page_log(**fields))

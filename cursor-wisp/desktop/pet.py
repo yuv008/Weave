@@ -500,20 +500,23 @@ class Pet:
         gy = max(-1.0, min(1.0, (look[1] - cy) / 120.0))
         dist = math.hypot(look[0] - cx, look[1] - cy)
         away = self.pinned and dist > AWAY_DIST
-        if away and typing:
+        recent = (now - last_type) < 1.2
+        if gx < -0.12:
+            flip = -1
+        elif gx > 0.12:
+            flip = 1
+        else:
+            flip = look_state.get("flip", 1)
+        if away and (typing or recent):
             mood = "peek"
             reading = False
-            flip = -1 if look[0] < cx else 1
-        elif away or (self.pinned and not typing):
+        elif away or (self.pinned and not recent):
             mood = "sad"
             reading = False
-            flip = 1
-            gx *= 0.25
-            gy = 0.8
+            gy = min(1.0, 0.55 + gy * 0.25)
         else:
             mood = ""
-            reading = typing
-            flip = 1
+            reading = typing or recent
         self._send_expression(view, look_state, gx, gy, reading, mood, flip)
 
     def _send_expression(self, view, look_state, gx, gy, reading, mood, flip):

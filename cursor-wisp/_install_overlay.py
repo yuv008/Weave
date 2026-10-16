@@ -19,7 +19,7 @@ for pet_id, path in cast:
     svg = path.read_text(encoding="utf-8").strip()
     if "</script" in svg.lower() or "</div" in svg.lower():
         raise SystemExit(f"unsafe markup in {path}")
-    hidden = "" if pet_id == "loaf" else " hidden"
+    hidden = "" if pet_id == "wisp" else " hidden"
     if 'preserveAspectRatio' not in svg:
         svg = svg.replace("<svg ", '<svg preserveAspectRatio="xMidYMid meet" ', 1)
     if ' width=' not in svg.split(">", 1)[0]:
@@ -54,29 +54,29 @@ frame = """<!DOCTYPE html>
     max-height: 92%;
   }
   .gaze {
-    transform: translate(calc(var(--gx, 0) * 16px), calc(var(--gy, 0) * 12px));
+    transform: translate(calc(var(--gx, 0) * 22px), calc(var(--gy, 0) * 14px));
     transform-box: fill-box;
     transform-origin: center;
   }
   .pet .wisp-root {
-    transform-origin: 50% 88%;
-    transition: transform 0.14s ease-out;
+    transform-origin: 50% 72%;
+    transform: rotate(calc(var(--gx, 0) * -20deg));
+    transition: transform 0.16s ease-out;
   }
   .pet.reading .wisp-root {
-    transform: rotate(calc(var(--gx, 0) * 6deg)) translateY(calc(var(--gy, 0) * -2px));
+    transform: rotate(calc(var(--gx, 0) * -24deg)) translateY(calc(var(--gy, 0) * -2px));
   }
   .pet.mood-sad .gaze {
-    transform: translate(calc(var(--gx, 0) * 4px), calc(7px + var(--gy, 0) * 3px)) scaleY(0.72);
+    transform: translate(calc(var(--gx, 0) * 20px), calc(8px + var(--gy, 0) * 6px)) scaleY(0.72);
   }
   .pet.mood-sad .wisp-root {
-    transform: translateY(2px) rotate(-2deg);
+    transform: translateY(3px) rotate(calc(var(--gx, 0) * -18deg));
   }
   .pet.mood-peek .wisp-root {
-    transform: scaleX(var(--peek-flip, 1)) rotate(calc(var(--gx, 0) * 9deg))
-      translateY(calc(var(--gy, 0) * -3px));
+    transform: rotate(calc(var(--gx, 0) * -32deg)) translateY(-2px);
   }
   .pet.mood-peek .gaze {
-    transform: translate(calc(var(--gx, 0) * 14px), calc(var(--gy, 0) * 10px));
+    transform: translate(calc(var(--gx, 0) * 26px), calc(var(--gy, 0) * 12px));
   }
   .pet.poking .wisp-root {
     animation: poke-body 0.7s ease-out;
@@ -95,8 +95,9 @@ frame = """<!DOCTYPE html>
     12%, 55% { transform: scaleY(0.08); }
   }
   @media (prefers-reduced-motion: reduce) {
-    .pet.reading .wisp-root { transform: none; }
-    .pet.mood-peek .wisp-root { transform: none; }
+    .pet .wisp-root,
+    .pet.reading .wisp-root,
+    .pet.mood-peek .wisp-root,
     .pet.mood-sad .wisp-root { transform: none; }
     .pet.mood-sad .gaze { transform: translateY(5px) scaleY(0.75); }
     .pet.poking .wisp-root { animation: none; transform: scale(0.97, 0.97); }
@@ -112,12 +113,8 @@ frame = """<!DOCTYPE html>
 """ + "\n".join(pets) + """
 <script>
   const order = ["wisp", "knot", "loaf", "pebble", "spark", "spindle"];
-  let current = "loaf";
+  let current = "wisp";
   let pokeTimer = 0;
-  try {
-    const saved = localStorage.getItem("weave-wisp");
-    if (order.includes(saved)) current = saved;
-  } catch (e) {}
   function visiblePet() {
     return document.querySelector(".pet:not([hidden])");
   }

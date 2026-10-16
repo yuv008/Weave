@@ -16,9 +16,9 @@ Wisp does not float over Gmail or Claude Code in v1. The desktop pet below is a 
 
 ## Desktop companion
 
-The pet is `cursor-wisp/desktop/pet.py`. On first launch it appears beside the mouse. After that it stays near the **text caret** while you type, when Windows reports one, and it does not follow the pointer around the screen. It notices that keys were pressed. It does not read or store the characters.
+The pet is `cursor-wisp/desktop/pet.py`. It starts as classic Wisp, the round purple one. On first launch it appears beside the mouse. After that it stays near the **text caret** while you type, when Windows reports one, and it does not follow the pointer around the screen. It notices that keys were pressed. It does not read or store the characters.
 
-The eyes look at the caret when Windows provides one. Editors that do not expose a caret, including Cursor, give the eyes the spot where the keys are being pressed instead. Dragging the pet away pins it there. The eyes droop while it is idle and away from that spot. Typing again makes it turn and peek toward the spot, without walking back. **Ctrl+Alt+.** clears the pin, jumps to the mouse, and the next typing session follows the caret again.
+The eyes look at the caret when Windows provides one. Editors that do not expose a caret, including Cursor, give the eyes the spot where the keys are being pressed instead. Dragging the pet away pins it there. It keeps facing that spot: the body leans toward it and the eyes look that way. While it is idle the eyes droop, still aimed to the side. Typing makes the lean stronger. It does not walk back. **Ctrl+Alt+.** clears the pin, jumps to the mouse, and the next typing session follows the caret again.
 
 The pet stays above ordinary windows. A maximized window does not hide it, and neither does clicking the desktop. A real fullscreen app that covers the whole monitor, including the taskbar, hides it until that app leaves fullscreen.
 

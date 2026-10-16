@@ -12,7 +12,50 @@ Locked choices for the first version:
 | When Wisp speaks | When you **ask**, and when the **watcher** has a notice for you |
 | Graph | **`co:real`** as the viewer (`WEAVE_VIEWER_EMAIL` person), same bearer token as the agent |
 
-Wisp does not float over Gmail or Claude Code in v1. A desktop overlay is a later phase after the agent URL is deployed. See [deployment.md](deployment.md).
+Wisp does not float over Gmail or Claude Code in v1. The desktop pet below is a local Windows companion. It does not call the agent. See [deployment.md](deployment.md) for the agent server.
+
+## Desktop companion
+
+The pet is `cursor-wisp/desktop/pet.py`. It wanders on the screen you are using and hops next to the mouse when you click or type. It notices that a key or click happened. It does not read or store the text.
+
+One pet can run at a time. A second start exits immediately.
+
+### Before the first start
+
+The window class is compiled once, next to `pet.py`. From `cursor-wisp/desktop`:
+
+```text
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:library /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:%APPDATA%\Python\Python312\site-packages\webview\lib\Microsoft.Web.WebView2.WinForms.dll /r:%APPDATA%\Python\Python312\site-packages\webview\lib\Microsoft.Web.WebView2.Core.dll /out:PetForm.dll PetForm.cs
+```
+
+That needs the WebView2 runtime and `pywebview` installed for the current user. `PetForm.dll` is a local build output and is not in git.
+
+### Start
+
+From `cursor-wisp/desktop`:
+
+```text
+pythonw pet.py
+```
+
+`python pet.py` does the same and keeps a console open. The character appears beside the mouse.
+
+### Stop
+
+Press **Ctrl+Alt+W**.
+
+If the window is gone but a later start does nothing, the previous process is still holding the lock. End the `pythonw.exe` or `python.exe` whose command line contains `pet.py`, then start it again.
+
+### Controls
+
+| Action | What happens |
+| --- | --- |
+| **Right-click** the character | Next companion: Wisp, Knot, Loaf, Pebble, Spark, Spindle |
+| **Ctrl+Alt+C** | Same as a right-click |
+| **Left-click** | Goes to the page underneath. The pet steps aside for that click |
+| **Ctrl+Alt+W** | Closes the pet |
+
+The cast is also previewed at `frontend/wisp-variants.html`. Classic Wisp on the ask page is `frontend/wisp.svg`.
 
 ## What Wisp is allowed to know
 

@@ -16,7 +16,11 @@ Wisp does not float over Gmail or Claude Code in v1. The desktop pet below is a 
 
 ## Desktop companion
 
-The pet is `cursor-wisp/desktop/pet.py`. It wanders on the screen you are using and hops next to the mouse when you click or type. It notices that a key or click happened. It does not read or store the text.
+The pet is `cursor-wisp/desktop/pet.py`. On first launch it appears beside the mouse. After that it stays near the **text caret** while you type, when Windows reports one, and it does not follow the pointer around the screen. It notices that keys were pressed. It does not read or store the characters.
+
+The eyes look at the caret when Windows provides one. Editors that do not expose a caret, including Cursor, give the eyes the spot where the keys are being pressed instead. Dragging the pet away pins it there. The eyes droop while it is idle and away from that spot. Typing again makes it turn and peek toward the spot, without walking back. **Ctrl+Alt+.** clears the pin, jumps to the mouse, and the next typing session follows the caret again.
+
+The pet stays above ordinary windows. A maximized window does not hide it, and neither does clicking the desktop. A real fullscreen app that covers the whole monitor, including the taskbar, hides it until that app leaves fullscreen.
 
 One pet can run at a time. A second start exits immediately.
 
@@ -29,6 +33,14 @@ C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:library 
 ```
 
 That needs the WebView2 runtime and `pywebview` installed for the current user. `PetForm.dll` is a local build output and is not in git.
+
+The caret helper is compiled once the same way:
+
+```text
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:library /r:%WINDIR%\Microsoft.NET\assembly\GAC_MSIL\UIAutomationTypes\v4.0_4.0.0.0__31bf3856ad364e35\UIAutomationTypes.dll /r:%WINDIR%\Microsoft.NET\assembly\GAC_MSIL\UIAutomationClient\v4.0_4.0.0.0__31bf3856ad364e35\UIAutomationClient.dll /r:%WINDIR%\Microsoft.NET\assembly\GAC_MSIL\WindowsBase\v4.0_4.0.0.0__31bf3856ad364e35\WindowsBase.dll /out:WispCaret.dll WispCaret.cs
+```
+
+`WispCaret.dll` is also a local build output and is not in git.
 
 ### Start
 
@@ -50,9 +62,12 @@ If the window is gone but a later start does nothing, the previous process is st
 
 | Action | What happens |
 | --- | --- |
-| **Right-click** the character | Next companion: Wisp, Knot, Loaf, Pebble, Spark, Spindle |
-| **Ctrl+Alt+C** | Same as a right-click |
-| **Left-click** | Goes to the page underneath. The pet steps aside for that click |
+| **Left-click and drag** anywhere on the pet | Move it and pin it. It stays put, with sad eyes while idle, until you recall it. A left click does not hide it |
+| **Type while it is pinned away** | It turns and peeks toward the caret, or toward where the keys are pressed when no caret is available. It does not walk back |
+| **Ctrl+Alt+.** (period), or the numpad decimal | Jump to the mouse, clear the pin, and follow the caret again on the next typing |
+| **Right-click** the body | Eyes close for a moment and the body nudges |
+| **Double right-click** the body | Next companion: Wisp, Knot, Loaf, Pebble, Spark, Spindle |
+| **Middle-click** the pet | Hide it while the button is held, so the click can pass through |
 | **Ctrl+Alt+W** | Closes the pet |
 
 The cast is also previewed at `frontend/wisp-variants.html`. Classic Wisp on the ask page is `frontend/wisp.svg`.

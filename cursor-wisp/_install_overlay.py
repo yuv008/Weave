@@ -53,31 +53,149 @@ frame = """<!DOCTYPE html>
     max-width: 92%;
     max-height: 92%;
   }
+  .gaze {
+    transform: translate(calc(var(--gx, 0) * 16px), calc(var(--gy, 0) * 12px));
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+  .pet .wisp-root {
+    transform-origin: 50% 88%;
+    transition: transform 0.14s ease-out;
+  }
+  .pet.reading .wisp-root {
+    transform: rotate(calc(var(--gx, 0) * 6deg)) translateY(calc(var(--gy, 0) * -2px));
+  }
+  .pet.mood-sad .gaze {
+    transform: translate(calc(var(--gx, 0) * 4px), calc(7px + var(--gy, 0) * 3px)) scaleY(0.72);
+  }
+  .pet.mood-sad .wisp-root {
+    transform: translateY(2px) rotate(-2deg);
+  }
+  .pet.mood-peek .wisp-root {
+    transform: scaleX(var(--peek-flip, 1)) rotate(calc(var(--gx, 0) * 9deg))
+      translateY(calc(var(--gy, 0) * -3px));
+  }
+  .pet.mood-peek .gaze {
+    transform: translate(calc(var(--gx, 0) * 14px), calc(var(--gy, 0) * 10px));
+  }
+  .pet.poking .wisp-root {
+    animation: poke-body 0.7s ease-out;
+  }
+  .pet.poking .eye {
+    animation: poke-squint 0.7s ease-out !important;
+  }
+  @keyframes poke-body {
+    0% { transform: rotate(0deg) scale(1, 1); }
+    18% { transform: rotate(-6deg) scale(1.04, 0.92); }
+    42% { transform: rotate(4deg) scale(0.98, 1.02); }
+    100% { transform: rotate(0deg) scale(1, 1); }
+  }
+  @keyframes poke-squint {
+    0%, 100% { transform: scaleY(1); }
+    12%, 55% { transform: scaleY(0.08); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pet.reading .wisp-root { transform: none; }
+    .pet.mood-peek .wisp-root { transform: none; }
+    .pet.mood-sad .wisp-root { transform: none; }
+    .pet.mood-sad .gaze { transform: translateY(5px) scaleY(0.75); }
+    .pet.poking .wisp-root { animation: none; transform: scale(0.97, 0.97); }
+    .pet.poking .eye { animation: poke-squint-reduced 0.5s ease-out !important; }
+    @keyframes poke-squint-reduced {
+      0%, 100% { transform: scaleY(1); }
+      30%, 70% { transform: scaleY(0.08); }
+    }
+  }
 </style>
 </head>
-<body title="Right-click for the next companion">
+<body title="Drag with left click. Right-click nudge. Double right-click next companion">
 """ + "\n".join(pets) + """
 <script>
   const order = ["wisp", "knot", "loaf", "pebble", "spark", "spindle"];
   let current = "loaf";
+  let pokeTimer = 0;
   try {
     const saved = localStorage.getItem("weave-wisp");
     if (order.includes(saved)) current = saved;
   } catch (e) {}
+  function visiblePet() {
+    return document.querySelector(".pet:not([hidden])");
+  }
+  function wrapEyes() {
+    document.querySelectorAll(".eye").forEach((eye) => {
+      if (eye.parentElement && eye.parentElement.classList.contains("gaze")) return;
+      const wrap = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      wrap.classList.add("gaze");
+      eye.parentNode.insertBefore(wrap, eye);
+      wrap.appendChild(eye);
+    });
+    document.querySelectorAll("svg > g.wisp").forEach((node) => {
+      node.classList.add("wisp-root");
+    });
+  }
   function show(id) {
     current = id;
     try { localStorage.setItem("weave-wisp", id); } catch (e) {}
     document.querySelectorAll(".pet").forEach((pet) => { pet.hidden = pet.dataset.id !== id; });
+    reportInk();
   }
   function weaveNext() {
     show(order[(order.indexOf(current) + 1) % order.length]);
   }
+  function weaveLook(gx, gy) {
+    const pet = visiblePet();
+    if (!pet) return;
+    pet.style.setProperty("--gx", String(gx));
+    pet.style.setProperty("--gy", String(gy));
+  }
+  function weaveReading(on) {
+    const pet = visiblePet();
+    if (!pet) return;
+    pet.classList.toggle("reading", !!on);
+  }
+  function weaveMood(mood, flip) {
+    const pet = visiblePet();
+    if (!pet) return;
+    pet.classList.remove("mood-sad", "mood-peek");
+    if (mood === "sad") pet.classList.add("mood-sad");
+    if (mood === "peek") pet.classList.add("mood-peek");
+    pet.style.setProperty("--peek-flip", flip < 0 ? "-1" : "1");
+  }
+  function weavePoke() {
+    const pet = visiblePet();
+    if (!pet) return;
+    pet.classList.remove("poking");
+    void pet.offsetWidth;
+    pet.classList.add("poking");
+    clearTimeout(pokeTimer);
+    pokeTimer = setTimeout(() => pet.classList.remove("poking"), 720);
+  }
+  function reportInk() {
+    const pet = visiblePet();
+    const svg = pet ? pet.querySelector("svg") : null;
+    if (!svg || !window.chrome || !chrome.webview) return;
+    const r = svg.getBoundingClientRect();
+    chrome.webview.postMessage({
+      type: "ink",
+      left: r.left,
+      top: r.top,
+      right: r.right,
+      bottom: r.bottom,
+    });
+  }
   window.weaveNext = weaveNext;
+  window.weaveLook = weaveLook;
+  window.weaveReading = weaveReading;
+  window.weaveMood = weaveMood;
+  window.weavePoke = weavePoke;
+  window.reportInk = reportInk;
   document.querySelectorAll("svg").forEach((svg) => {
     svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
   });
+  wrapEyes();
   show(current);
-  document.body.addEventListener("click", weaveNext);
+  setInterval(reportInk, 120);
+  window.addEventListener("resize", reportInk);
 </script>
 </body>
 </html>

@@ -1,0 +1,13 @@
+{
+  "name": "wisp",
+  "displayName": "Wisp",
+  "description": "Closes the old editor companion. The pet is drawn beside the chat input.",
+  "version": "0.3.0",
+  "publisher": "weave",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished", "onWebviewPanel:wisp.companion"],
+  "main": "./extension.js"
+}

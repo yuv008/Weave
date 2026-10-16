@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 220" overflow="visible" role="img" aria-label="Spindle">
+  <defs>
+    <linearGradient id="n-body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E0E7FF"/>
+      <stop offset="18%" stop-color="#A5B4FC"/>
+      <stop offset="55%" stop-color="#4338CA"/>
+      <stop offset="100%" stop-color="#1E1B4B"/>
+    </linearGradient>
+    <radialGradient id="n-sheen" cx="40%" cy="18%" r="36%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="n-bulb" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="40%" stop-color="#A5F3FC"/>
+      <stop offset="100%" stop-color="#6366F1"/>
+    </radialGradient>
+    <filter id="n-cast" x="-50%" y="-15%" width="200%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="2.4" flood-color="#0B0F1A" flood-opacity="0.28"/>
+    </filter>
+    <style>
+      .eye { transform-box: fill-box; transform-origin: center; }
+      @media (prefers-reduced-motion: reduce) { .float, .sway, .eye { animation: none !important; } }
+      @keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+      @keyframes sway { 0%,100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } }
+      @keyframes blink { 0%,92%,100% { transform: scaleY(1); } 96% { transform: scaleY(0.08); } }
+      .float { animation: float 3.1s ease-in-out infinite; transform-origin: 50px 120px; }
+      .sway { animation: sway 5.4s ease-in-out infinite; transform-origin: 50px 140px; }
+      .eye { animation: blink 5s infinite; }
+    </style>
+  </defs>
+  <g class="wisp" data-variant="spindle">
+    <g class="float"><g class="sway">
+      <ellipse cx="48" cy="208" rx="16" ry="4" fill="#0B0F1A" opacity="0.2"/>
+      <g filter="url(#n-cast)">
+        <path fill="#312E81" d="M62 168c12 14 16 32 6 40-8 6-16 0-14-12 1-14 2-22 8-28z"/>
+        <path fill="#A5F3FC" opacity="0.45" d="M66 176c4 8 4 14 0 18-2-6-3-12-4-16 1-1 2-2 4-2z"/>
+        <path fill="url(#n-body)" d="M48 36c-14 6-18 32-16 64-2 36 6 70 16 86 10 14 22 8 22-8 0-28 8-52 6-84-2-28-12-64-28-58z"/>
+        <ellipse cx="42" cy="62" rx="10" ry="22" fill="url(#n-sheen)"/>
+        <path fill="none" stroke="#E0E7FF" stroke-opacity="0.7" stroke-width="1.6" stroke-linecap="round" d="M36 58c2-14 8-20 16-16"/>
+        <path fill="#A5F3FC" d="M44 118c6 3 10 1 8-4-4 0-7 1-8 4z"/>
+        <g class="eye">
+          <ellipse cx="40" cy="84" rx="4.6" ry="6" fill="#020617"/>
+          <ellipse cx="38.6" cy="81.6" rx="1.6" ry="2" fill="#F8FAFC"/>
+          <ellipse cx="41.8" cy="86.4" rx="0.8" ry="0.9" fill="#F8FAFC" opacity="0.5"/>
+        </g>
+        <g class="eye" style="animation-delay:.12s">
+          <ellipse cx="58" cy="84" rx="4.6" ry="6" fill="#020617"/>
+          <ellipse cx="56.6" cy="81.6" rx="1.6" ry="2" fill="#F8FAFC"/>
+          <ellipse cx="59.8" cy="86.4" rx="0.8" ry="0.9" fill="#F8FAFC" opacity="0.5"/>
+        </g>
+        <path fill="#A5B4FC" d="M48 40c-1-14 1-22 1-28 2 6 3 16 1 28z"/>
+        <circle cx="49" cy="10" r="5.2" fill="url(#n-bulb)"/>
+      </g>
+    </g></g>
+  </g>
+</svg>

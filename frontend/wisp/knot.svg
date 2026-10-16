@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 190" overflow="visible" role="img" aria-label="Knot">
+  <defs>
+    <radialGradient id="k-body" cx="38%" cy="30%" r="72%">
+      <stop offset="0%" stop-color="#ECFDF5"/>
+      <stop offset="22%" stop-color="#5EEAD4"/>
+      <stop offset="62%" stop-color="#0F766E"/>
+      <stop offset="100%" stop-color="#115E59"/>
+    </radialGradient>
+    <radialGradient id="k-sheen" cx="32%" cy="28%" r="46%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.75"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="k-loop" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#99F6E4"/>
+      <stop offset="50%" stop-color="#0D9488"/>
+      <stop offset="100%" stop-color="#5B21B6"/>
+    </linearGradient>
+    <radialGradient id="k-bulb" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="40%" stop-color="#DDD6FE"/>
+      <stop offset="100%" stop-color="#7C3AED"/>
+    </radialGradient>
+    <filter id="k-cast" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="6" stdDeviation="3" flood-color="#0B0F1A" flood-opacity="0.26"/>
+    </filter>
+    <style>
+      .eye, .foot { transform-box: fill-box; transform-origin: center; }
+      .foot { transform-origin: center bottom; }
+      @media (prefers-reduced-motion: reduce) { .float, .sway, .eye, .foot { animation: none !important; } }
+      @keyframes float { 0%,100% { transform: translateY(0) scale(1,1); } 50% { transform: translateY(-6px) scale(1.02,0.98); } }
+      @keyframes sway { 0%,100% { transform: rotate(-2.5deg); } 50% { transform: rotate(2.5deg); } }
+      @keyframes blink { 0%,90%,100% { transform: scaleY(1); } 95% { transform: scaleY(0.08); } }
+      @keyframes step { 50% { transform: translateY(-3px); } }
+      .float { animation: float 3.4s ease-in-out infinite; transform-origin: 90px 110px; }
+      .sway { animation: sway 5s ease-in-out infinite; transform-origin: 90px 120px; }
+      .eye { animation: blink 4.8s infinite; }
+      .foot-l { animation: step 0.7s ease-in-out infinite; }
+      .foot-r { animation: step 0.7s ease-in-out infinite 0.35s; }
+    </style>
+  </defs>
+  <g class="wisp" data-variant="knot">
+    <g class="float"><g class="sway">
+      <ellipse cx="90" cy="176" rx="36" ry="6" fill="#0B0F1A" opacity="0.18"/>
+      <g filter="url(#k-cast)">
+        <path fill="url(#k-loop)" fill-rule="evenodd" d="M90 168c-46 0-70-36-58-74 12-36 58-52 96-36 40 16 52 70 22 104-22 26-48 22-60 6 8 8 28 10 40-2 18-16 14-46-8-58-24-14-50 8-42 28 6 16 24 22 38 14 8-4 12-10 12-16-10 2-22-2-28-12z"/>
+        <path fill="url(#k-body)" d="M92 78c-28 0-42 20-40 40-2 18 14 32 36 32 20 0 36-12 36-30 2-22-10-42-32-42z"/>
+        <ellipse cx="78" cy="96" rx="16" ry="18" fill="url(#k-sheen)"/>
+        <path fill="none" stroke="#F8FAFC" stroke-opacity="0.4" stroke-width="2" stroke-linecap="round" d="M68 92c4-12 16-16 26-10"/>
+        <g class="eye">
+          <ellipse cx="80" cy="108" rx="6.4" ry="7.6" fill="#0B0F1A"/>
+          <ellipse cx="78.2" cy="105" rx="2.2" ry="2.6" fill="#F8FAFC"/>
+          <ellipse cx="82.4" cy="111.2" rx="1" ry="1.1" fill="#F8FAFC" opacity="0.5"/>
+        </g>
+        <g class="eye" style="animation-delay:.1s">
+          <ellipse cx="106" cy="108" rx="6.4" ry="7.6" fill="#0B0F1A"/>
+          <ellipse cx="104.2" cy="105" rx="2.2" ry="2.6" fill="#F8FAFC"/>
+          <ellipse cx="108.4" cy="111.2" rx="1" ry="1.1" fill="#F8FAFC" opacity="0.5"/>
+        </g>
+        <path class="foot foot-l" fill="#0F766E" d="M74 146c-5 2-7 8-3 13 3 3 7 3 10 0 2-6 1-11-7-13z"/>
+        <path class="foot foot-r" fill="#115E59" d="M104 146c5 2 8 8 4 13-3 3-7 3-10 0-3-6-2-11 6-13z"/>
+        <path fill="#C4B5FD" d="M92 80c-1-12 1-18 2-24 1 6 3 14 1 24z"/>
+        <circle cx="94" cy="54" r="6.5" fill="url(#k-bulb)"/>
+      </g>
+    </g></g>
+  </g>
+</svg>

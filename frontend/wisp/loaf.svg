@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 140" overflow="visible" role="img" aria-label="Loaf">
+  <defs>
+    <radialGradient id="l-body" cx="32%" cy="34%" r="75%">
+      <stop offset="0%" stop-color="#FFF7ED"/>
+      <stop offset="28%" stop-color="#FDBA74"/>
+      <stop offset="70%" stop-color="#F97316"/>
+      <stop offset="100%" stop-color="#C2410C"/>
+    </radialGradient>
+    <radialGradient id="l-belly" cx="50%" cy="40%" r="70%">
+      <stop offset="0%" stop-color="#FFFBEB"/>
+      <stop offset="100%" stop-color="#FDE68A"/>
+    </radialGradient>
+    <radialGradient id="l-sheen" cx="30%" cy="30%" r="42%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="l-bulb" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="45%" stop-color="#FDE68A"/>
+      <stop offset="100%" stop-color="#EA580C"/>
+    </radialGradient>
+    <filter id="l-cast" x="-20%" y="-30%" width="140%" height="170%">
+      <feDropShadow dx="0" dy="6" stdDeviation="3" flood-color="#0B0F1A" flood-opacity="0.22"/>
+    </filter>
+    <style>
+      .eye, .foot { transform-box: fill-box; transform-origin: center; }
+      .foot { transform-origin: center bottom; }
+      @media (prefers-reduced-motion: reduce) { .float, .sway, .eye, .foot { animation: none !important; } }
+      @keyframes float { 0%,100% { transform: translateY(0) scaleX(1); } 50% { transform: translateY(-4px) scaleX(1.02); } }
+      @keyframes sway { 0%,100% { transform: rotate(-1.5deg); } 50% { transform: rotate(1.5deg); } }
+      @keyframes blink { 0%,88%,100% { transform: scaleY(1); } 94% { transform: scaleY(0.15); } }
+      @keyframes step { 50% { transform: translateY(-2px); } }
+      .float { animation: float 4.2s ease-in-out infinite; transform-origin: 120px 80px; }
+      .sway { animation: sway 6s ease-in-out infinite; transform-origin: 120px 90px; }
+      .eye { animation: blink 5.4s infinite; }
+      .foot-l { animation: step 0.9s ease-in-out infinite; }
+      .foot-r { animation: step 0.9s ease-in-out infinite 0.45s; }
+    </style>
+  </defs>
+  <g class="wisp" data-variant="loaf">
+    <g class="float"><g class="sway">
+      <ellipse cx="120" cy="126" rx="70" ry="7" fill="#0B0F1A" opacity="0.16"/>
+      <g filter="url(#l-cast)">
+        <path fill="url(#l-body)" d="M40 86c-4-28 36-46 82-42 40-6 86 8 90 36 4 26-24 42-72 44-46 2-96-8-100-38z"/>
+        <ellipse cx="118" cy="96" rx="42" ry="18" fill="url(#l-belly)"/>
+        <ellipse cx="86" cy="70" rx="28" ry="16" fill="url(#l-sheen)"/>
+        <path fill="none" stroke="#FFF7ED" stroke-opacity="0.7" stroke-width="2.4" stroke-linecap="round" d="M62 74c14-12 36-14 52-4"/>
+        <g class="eye">
+          <ellipse cx="96" cy="82" rx="7" ry="6.2" fill="#7C2D12"/>
+          <ellipse cx="93.8" cy="79.6" rx="2.3" ry="2.2" fill="#FFF7ED"/>
+          <ellipse cx="98.6" cy="84.2" rx="1.1" ry="1" fill="#FFF7ED" opacity="0.55"/>
+        </g>
+        <g class="eye" style="animation-delay:.15s">
+          <ellipse cx="132" cy="82" rx="7" ry="6.2" fill="#7C2D12"/>
+          <ellipse cx="129.8" cy="79.6" rx="2.3" ry="2.2" fill="#FFF7ED"/>
+          <ellipse cx="134.6" cy="84.2" rx="1.1" ry="1" fill="#FFF7ED" opacity="0.55"/>
+        </g>
+        <path class="foot foot-l" fill="#EA580C" d="M88 112c-6 1-8 7-4 11 3 3 8 2 11-1 1-5 0-9-7-10z"/>
+        <path class="foot foot-r" fill="#C2410C" d="M140 112c6 1 9 7 5 11-3 3-8 2-11-1-2-5-1-9 6-10z"/>
+        <path fill="#FDE68A" d="M114 48c-1-10 2-16 2-20 2 5 3 12 1 20z"/>
+        <circle cx="116" cy="26" r="6" fill="url(#l-bulb)"/>
+      </g>
+    </g></g>
+  </g>
+</svg>

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wisp cast</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: "Plus Jakarta Sans", sans-serif;
+    background: #0B0F1A; color: #F8FAFC;
+  }
+  header { padding: 32px 40px 8px; max-width: 1100px; margin: 0 auto; }
+  h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: -0.03em; }
+  p { margin: 0; color: #A8B3C7; max-width: 40rem; line-height: 1.5; }
+  .stage { margin: 28px auto; max-width: 1100px; padding: 28px 24px 36px; border-radius: 24px; }
+  .stage.dark { background: #0B0F1A; border: 1px solid rgba(248,250,252,0.08); }
+  .stage.light { background: #F8FAFC; color: #0B0F1A; }
+  .stage h2 { margin: 0 0 18px; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .row { display: flex; align-items: end; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+  figure { margin: 0; text-align: center; flex: 1 1 140px; }
+  figure svg { display: block; margin: 0 auto; background: transparent; }
+  figcaption { margin-top: 8px; font-size: 13px; }
+  .stage.dark figcaption { color: #C4B5FD; }
+  .stage.light figcaption { color: #3F6212; }
+  .small { margin-top: 28px; align-items: center; }
+  .small figure svg { height: 64px; width: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>The cast</h1>
+  <p>Wisp, Knot, Loaf, Pebble, Spark, and Spindle. Full size above the 64 pixel row, on dark and on light.</p>
+</header>
+<section class="stage dark" id="dark">
+  <h2>Dark</h2>
+  <div class="row full"></div>
+  <div class="row small"></div>
+</section>
+<section class="stage light" id="light">
+  <h2>Light</h2>
+  <div class="row full"></div>
+  <div class="row small"></div>
+</section>
+<script>
+const cast = [
+  ["wisp.svg", 119, 150, "Wisp"],
+  ["wisp/knot.svg", 150, 158, "Knot"],
+  ["wisp/loaf.svg", 220, 132, "Loaf"],
+  ["wisp/pebble.svg", 140, 147, "Pebble"],
+  ["wisp/spark.svg", 112, 141, "Spark"],
+  ["wisp/spindle.svg", 72, 162, "Spindle"],
+];
+async function mount(row, small) {
+  for (const [src, w, h, name] of cast) {
+    const text = await fetch(src).then((r) => r.text());
+    const fig = document.createElement("figure");
+    fig.innerHTML = text + `<figcaption>${name}</figcaption>`;
+    const svg = fig.querySelector("svg");
+    if (small) {
+      svg.setAttribute("height", "64");
+      svg.removeAttribute("width");
+    } else {
+      svg.setAttribute("width", w);
+      svg.setAttribute("height", h);
+    }
+    row.append(fig);
+  }
+}
+for (const stage of document.querySelectorAll(".stage")) {
+  mount(stage.querySelector(".full"), false);
+  mount(stage.querySelector(".small"), true);
+}
+</script>
+</body>
+</html>

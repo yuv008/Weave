@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 168" overflow="visible" role="img" aria-label="Pebble">
+  <defs>
+    <radialGradient id="p-body" cx="36%" cy="32%" r="74%">
+      <stop offset="0%" stop-color="#ECFCCB"/>
+      <stop offset="24%" stop-color="#BEF264"/>
+      <stop offset="58%" stop-color="#65A30D"/>
+      <stop offset="100%" stop-color="#3F6212"/>
+    </radialGradient>
+    <radialGradient id="p-sheen" cx="32%" cy="28%" r="44%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.75"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="p-bulb" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="40%" stop-color="#BEF264"/>
+      <stop offset="100%" stop-color="#3F6212"/>
+    </radialGradient>
+    <filter id="p-cast" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="6" stdDeviation="3" flood-color="#0B0F1A" flood-opacity="0.24"/>
+    </filter>
+    <style>
+      .eye, .foot { transform-box: fill-box; transform-origin: center; }
+      .foot { transform-origin: center bottom; }
+      @media (prefers-reduced-motion: reduce) { .float, .sway, .eye, .foot { animation: none !important; } }
+      @keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+      @keyframes sway { 0%,100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } }
+      @keyframes blink { 0%,91%,100% { transform: scaleY(1); } 96% { transform: scaleY(0.08); } }
+      @keyframes step { 50% { transform: translateY(-3px); } }
+      .float { animation: float 3.5s ease-in-out infinite; transform-origin: 80px 90px; }
+      .sway { animation: sway 4.6s ease-in-out infinite; transform-origin: 80px 100px; }
+      .eye { animation: blink 4.2s infinite; }
+      .foot-l { animation: step 0.75s ease-in-out infinite; }
+      .foot-r { animation: step 0.75s ease-in-out infinite 0.35s; }
+    </style>
+  </defs>
+  <g class="wisp" data-variant="pebble">
+    <g class="float"><g class="sway">
+      <ellipse cx="80" cy="156" rx="32" ry="6" fill="#0B0F1A" opacity="0.16"/>
+      <g filter="url(#p-cast)">
+        <path fill="url(#p-body)" d="M80 46c-32 2-48 26-46 52-2 24 16 40 42 40 28 0 46-16 46-40 2-28-12-54-42-52z"/>
+        <ellipse cx="64" cy="68" rx="18" ry="20" fill="url(#p-sheen)"/>
+        <path fill="none" stroke="#F7FEE7" stroke-opacity="0.8" stroke-width="2.2" stroke-linecap="round" d="M52 66c6-14 20-18 32-10"/>
+        <ellipse cx="62" cy="40" rx="7" ry="3.2" fill="#4ADE80" transform="rotate(-30 62 40)"/>
+        <g class="eye">
+          <ellipse cx="66" cy="96" rx="7" ry="8.2" fill="#14532D"/>
+          <ellipse cx="63.8" cy="92.8" rx="2.4" ry="2.8" fill="#F8FAFC"/>
+          <ellipse cx="68.6" cy="99.6" rx="1.1" ry="1.2" fill="#F8FAFC" opacity="0.5"/>
+        </g>
+        <g class="eye" style="animation-delay:.08s">
+          <ellipse cx="96" cy="96" rx="7" ry="8.2" fill="#14532D"/>
+          <ellipse cx="93.8" cy="92.8" rx="2.4" ry="2.8" fill="#F8FAFC"/>
+          <ellipse cx="98.6" cy="99.6" rx="1.1" ry="1.2" fill="#F8FAFC" opacity="0.5"/>
+        </g>
+        <path class="foot foot-l" fill="#3F6212" d="M58 132c-5 2-7 8-3 12 3 3 7 3 10 0 2-5 1-10-7-12z"/>
+        <path class="foot foot-r" fill="#365314" d="M96 132c5 2 8 8 4 12-3 3-7 3-10 0-3-5-2-10 6-12z"/>
+        <path fill="#84CC16" d="M80 48c-1-12 1-18 1-24 2 6 3 14 1 24z"/>
+        <circle cx="81" cy="22" r="6.2" fill="url(#p-bulb)"/>
+      </g>
+    </g></g>
+  </g>
+</svg>

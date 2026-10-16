@@ -105,23 +105,17 @@
   .lede { margin: 0 0 22px; max-width: 38rem; color: var(--muted); font-size: 17px; line-height: 1.5; }
   .hero { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 8px; align-items: end; }
   .pet-pad { position: relative; height: 148px; pointer-events: none; }
-  .pet { position: absolute; left: 18px; top: 16px; width: 86px; animation: wander 6.5s ease-in-out infinite; }
-  .pet .body { display: block; height: 62px; border-radius: 28px 28px 22px 22px; background: var(--grad); position: relative; }
-  .pet .face { position: absolute; left: 16px; top: 16px; display: flex; gap: 14px; }
-  .pet .eye { width: 8px; height: 10px; border-radius: 99px; background: #0B0F1A; animation: blink 4.5s infinite; }
-  .pet .antenna { position: absolute; left: 36px; top: -16px; width: 8px; height: 18px; border-radius: 99px; background: var(--lavender); }
-  .pet .antenna::after { content: ""; position: absolute; left: -3px; top: -8px; width: 14px; height: 14px; border-radius: 99px; background: var(--grad); }
-  .pet .feet { display: flex; justify-content: space-between; padding: 0 16px; }
-  .pet .feet i { width: 10px; height: 14px; border-radius: 0 0 8px 8px; background: var(--blue); display: block; animation: step 0.6s ease-in-out infinite alternate; }
-  .pet .feet i:last-child { animation-delay: 0.3s; }
+  .pet {
+    position: absolute; left: 4px; top: 0; width: 96px; height: 120px;
+    border: 0; background: transparent; animation: wander 6.5s ease-in-out infinite;
+  }
+  .pet svg { width: 100%; height: 100%; display: block; overflow: visible; background: transparent; }
   .pet.listening { animation: lean 0.7s ease-in-out infinite; }
   .pet.typing { animation: none; transform: translate(8px, 18px); }
-  @keyframes wander { 0%,100% { transform: translate(0,0); } 40% { transform: translate(22px, 16px); } 70% { transform: translate(-8px, 6px); } }
-  @keyframes lean { 50% { transform: translate(0, 26px) scale(1.05); } }
-  @keyframes blink { 0%, 92%, 100% { transform: scaleY(1); } 96% { transform: scaleY(0.15); } }
-  @keyframes step { from { transform: translateY(0); } to { transform: translateY(-4px); } }
+  @keyframes wander { 0%,100% { transform: translate(0,0); } 40% { transform: translate(22px, 14px); } 70% { transform: translate(-8px, 8px); } }
+  @keyframes lean { 50% { transform: translate(4px, 20px) scale(1.04); } }
   @media (prefers-reduced-motion: reduce) {
-    .pet, .pet .eye, .pet .feet i { animation: none; }
+    .pet { animation: none; }
   }
   .ask {
     display: flex; gap: 8px; align-items: center;
@@ -342,7 +336,7 @@ function renderAsk() {
   const active = decisions.find((d) => d.status === "active" && visibleDecision(d));
   const feature = active ? `<button class="feature" type="button" data-decision="${active.id}"><span class="kicker">Active now</span><strong>${esc(active.statement)}</strong><span class="meta">${esc(people[active.by].name)}, ${esc(active.when)}. See where this came from.</span></button>` : "";
   const chips = sources.filter((s) => can(s.id)).map((s) => `<span>${esc(s.name)}</span>`).join("");
-  const pet = `<div class="pet-pad"><div class="pet" id="pet"><span class="antenna"></span><span class="body"><span class="face"><span class="eye"></span><span class="eye"></span></span></span><span class="feet"><i></i><i></i></span></div></div>`;
+  const pet = `<div class="pet-pad"><div class="pet" id="pet" data-wisp="classic" aria-hidden="true"></div></div>`;
   return `<div class="hero"><div><p class="kicker">Ask</p><h1>${esc(me().name)}, what changed?</h1><p class="lede">Ask about a decision, a promise, or a number. You get the fact, and where it was said.</p><div class="chips">${chips}</div></div>${pet}</div>
     <form class="ask" id="ask-form"><input id="q" name="q" placeholder="Why did we change SSO providers?" value="${esc(state.query)}" autocomplete="off"><button type="button" class="mic" id="mic" aria-pressed="false">Speak</button><button type="submit">Look up</button></form>
     <p class="voice-note" id="voice-note"></p>
@@ -451,6 +445,20 @@ function draw() {
     else b.removeAttribute("aria-current");
   });
   document.getElementById("main").innerHTML = screens[state.screen]();
+  mountWisp();
+}
+function mountWisp() {
+  const slot = document.getElementById("pet");
+  if (!slot) return;
+  fetch("wisp.svg").then((r) => r.text()).then((text) => {
+    if (!document.getElementById("pet")) return;
+    slot.innerHTML = text;
+    const svg = slot.querySelector("svg");
+    if (svg) svg.style.background = "transparent";
+  });
+}
+function setWispState(name) {
+  document.querySelector("#pet .wisp")?.setAttribute("data-state", name);
 }
 document.getElementById("nav").onclick = (e) => {
   const screen = e.target.closest("button")?.dataset.screen;
@@ -482,6 +490,7 @@ function startVoice() {
     mic.setAttribute("aria-pressed", "true");
     mic.textContent = "Listening";
     petEl?.classList.add("listening");
+    setWispState("reading");
     if (note) note.textContent = "Listening. Say the question.";
   };
   listener.onresult = (event) => {
@@ -502,6 +511,7 @@ function startVoice() {
       mic.setAttribute("aria-pressed", "false");
       mic.textContent = "Speak";
       petEl?.classList.remove("listening");
+      setWispState("resting");
     }
   };
   listener.start();

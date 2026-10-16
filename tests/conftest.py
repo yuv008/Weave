@@ -1,4 +1,3 @@
-import os
 import uuid
 
 import pytest
@@ -6,16 +5,18 @@ import pytest
 
 @pytest.fixture
 def graph():
-    falkordb = pytest.importorskip("falkordb")
-    port = int(os.environ.get("FALKORDB_PORT", "6380"))
-    host = os.environ.get("FALKORDB_HOST", "localhost")
+    pytest.importorskip("falkordb")
+    from shared.env import load_env
+    from shared.graphdb import connect
+
+    load_env()
     try:
-        client = falkordb.FalkorDB(host=host, port=port)
+        client = connect()
         name = f"weave_test_{uuid.uuid4().hex}"
         database = client.select_graph(name)
         database.query("RETURN 1")
     except Exception as exc:
-        pytest.skip(f"FalkorDB is not available: {exc}")
+        pytest.skip(f"FalkorDB is not available: {type(exc).__name__}")
     from app.graph.upsert import ensure_indexes
 
     ensure_indexes(database)

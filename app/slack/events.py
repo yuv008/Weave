@@ -10,6 +10,7 @@ import hmac
 import logging
 from datetime import UTC, datetime
 
+from app.graph.policy import allowed_source
 from app.graph.upsert import upsert_message
 from app.ingest.records import open_store
 from app.ingest.state import event_already_applied, mark_event_applied
@@ -81,6 +82,8 @@ def apply_slack_event(
         workspace_domain=workspace_domain,
     )
     if message is None:
+        return {"ok": True}
+    if allowed_source("slack", channel_id) is None:
         return {"ok": True}
     upsert_message(graph, message, now=datetime.now(UTC))
     mark_event_applied(records, event_id, tenant_id)

@@ -11,6 +11,7 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from app.answer.claims import record_commitment, record_figure, supersede_claim
 from app.answer.decision import channel_decisions
 from app.ingest.records import MemoryStore, postgres_store
 from app.github.events import apply_github_event, verify_github_signature
@@ -144,6 +145,35 @@ def create_app(
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         return {"decisions": [decision.as_dict() for decision in decisions]}
+
+    async def _claim(request: Request, handler):
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError:
+            return JSONResponse({"error": "invalid json"}, status_code=400)
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "invalid json"}, status_code=400)
+        target = app.state.graph
+        if target is None:
+            from app.graph.client import connect_graph
+
+            target = connect_graph()
+        try:
+            return handler(target, _records(app), app.state.tenant_id, payload)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/claims/commitment")
+    async def claim_commitment(request: Request):
+        return await _claim(request, lambda graph, store, tenant, body: {"id": record_commitment(graph, store, tenant, body)})
+
+    @app.post("/claims/figure")
+    async def claim_figure(request: Request):
+        return await _claim(request, lambda graph, store, tenant, body: {"id": record_figure(graph, store, tenant, body)})
+
+    @app.post("/claims/supersede")
+    async def claim_supersede(request: Request):
+        return await _claim(request, supersede_claim)
 
     return app
 

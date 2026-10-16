@@ -1,16 +1,16 @@
 # Weave build log
 
-Living record of what is actually in the repository. `AGENTS.md` is the product constitution. Connector plans: [docs/slack-plan.md](docs/slack-plan.md), [docs/notion-plan.md](docs/notion-plan.md), [docs/drive-plan.md](docs/drive-plan.md), [docs/github-plan.md](docs/github-plan.md). This file is the status.
+Living record of what is actually in the repository. `AGENTS.md` is the product constitution. Connector plans: [docs/slack-plan.md](docs/slack-plan.md), [docs/notion-plan.md](docs/notion-plan.md), [docs/drive-plan.md](docs/drive-plan.md), [docs/github-plan.md](docs/github-plan.md). Ingestion flow and the 16 October live write: [docs/ingestion.md](docs/ingestion.md). This file is the status.
 
 Update this file when a slice lands or a decision changes. The Grok development prompt in `prompts/grok-session-summary.md` reads this file and refreshes the summary every 30 minutes.
 
 ## Latest summary
 
-- **As of:** 15 October 2026
-- **Built:** Public Slack, Notion, and Google Drive are connected for this demo. New connector writes go to `co:{WEAVE_TENANT}` and only for sources listed in `config/weave.yaml`. Slack messages are `:Message:Item` with `IN_SOURCE` and `AUTHORED_BY`. GitHub issues use the shared issue id and the `Issue` label. `POST /slack/decisions` merges one `Decision` per matching message. `SyncState`, `SyncFailure`, and `SlackEvent` are Postgres `ingest_record` rows. Person nodes still lack `name`, `email`, `level`, and `dept`. `AUTHORED` and `CONTAINS` remain, so `validate_graph` does not report `errors=0`.
-- **Not built:** OAuth, a web UI, and a model-backed answer. GitHub file contents, diffs, and review threads are out of scope. `Commitment`, `Figure`, supersede, and projections are not built. The live demo channel is not in `config/weave.yaml`, so it is not written.
-- **Next step:** Both builders add the live Slack channel to `config/weave.yaml` if that workspace should be ingested. Full message and document bodies are still not stored.
-- **Open:** Where full message bodies live. Person email, level, and dept are still missing, so the validator reports those people.
+- **As of:** 16 October 2026
+- **Built:** Public Slack, Notion, Google Drive, and GitHub `yuv008/portfolio` have a kept write in `co:real`. `WEAVE_TENANT` and `WEAVE_TENANT_ID` are `real`. `config/weave.yaml` still says `tenant: acme`, so agents that fall back to the file stay on the fixture. An unlisted source returns before the checkpoint moves. A successful page refreshes `source_sync` and embeds non-empty excerpts into `chunk` (`BAAI/bge-small-en-v1.5`, 384). The poll stored 5 Slack messages, 5 portfolio pull requests plus their comments, 1 Notion document, and 1 Drive document. Seventeen chunks were written. `search_context` and `python -m scripts.ask --local` both cited the Drive test doc and the Slack events message from `co:real`. The viewer person is keyed by the mailbox in `WEAVE_VIEWER_EMAIL`, with Slack id, name, level 1, and department engineering. The other Slack author has a display name and no level or department. `POST /claims/commitment`, `POST /claims/figure`, and `POST /claims/supersede` record caller-supplied facts. The quote must appear in the stored excerpt. Supersede writes one `change_event` row and leaves the old claim inactive. No live claim has been written into `co:real`.
+- **Not built:** OAuth, a web UI, and a model-backed answer. GitHub file contents, diffs, and review threads are out of scope. Projections are not built. Slack events and the GitHub webhook do not embed until the next poll. The private `yuv008/Weave` repository was not polled. `validate_graph` does not report `errors=0` because older `AUTHORED` and `CONTAINS` edges remain and the non-viewer Slack person has no email.
+- **Next step:** Run `python -m scripts.validate_graph --tenant real` after the remaining Slack person has an email, or accept that gap for the demo. Full message and document bodies are still not stored.
+- **Open:** Where full message bodies live. People other than the viewer are still not merged across Slack, GitHub, and Notion.
 
 ## Decisions
 
@@ -27,7 +27,10 @@ Update this file when a slice lands or a decision changes. The Grok development 
 - Deletes blank the excerpt and leave the edges. Earlier versions are not kept.
 - The Slack code path has run against the connected demo workspace. Human `message.channels` delivery and a later delete were both confirmed on the same public-channel message. The workspace id stays in `.env`.
 - Notion and Drive call their APIs directly. Notion users and Drive owners are not merged into Slack `Person` nodes. `NOTION_VERSION` is `2026-03-11`.
-- GitHub calls the REST API directly at version `2026-03-10`. One repository. Issues and pull requests, plus issue comments, are `Document` nodes. File contents are not read. No live GitHub write has been confirmed. See `docs/github-plan.md`.
+- GitHub calls the REST API directly at version `2026-03-10`. Issues and pull requests are `Issue` nodes. Issue comments are `Document` nodes. File contents are not read. `yuv008/portfolio` was polled into `co:real`. The private `yuv008/Weave` repository is allow-listed and was not polled, because the token cannot see it. See `docs/github-plan.md`.
+- The viewer person id is `person_id(tenant, email)` from `WEAVE_VIEWER_EMAIL`. Only that address receives `level` and `dept`. The address is not committed. Other Slack authors stay on `{tenant}:slack:person:{team}:{user}`.
+- A successful Postgres poll page embeds excerpts in the same process. Tests pass a memory store, so they do not download the embedding model.
+- Commitments and figures are caller-supplied. They are not extracted by a model. A quote that is missing from the excerpt is rejected. Repeating the same evidence and statement merges. Supersede never overwrites.
 
 ## What is built
 
@@ -50,7 +53,10 @@ Update this file when a slice lands or a decision changes. The Grok development 
 | Notion connector | `app/notion/` | REST client, block text, poll of shared pages, tombstones for `in_trash`. |
 | Drive connector | `app/gdrive/`, `scripts/check_drive_access.py` | Read-only service account. Google Docs in one folder. Other MIME types are skipped. |
 | Document answers | `app/answer/notion_question.py`, `app/answer/drive_question.py`, `app/answer/github_question.py` | Excerpt matches with source URLs. Deleted documents are excluded. No model call. |
-| GitHub connector | `app/github/`, `scripts/check_github_access.py` | One repository. Issues, pull requests, and issue comments. Poll watermark, failure retry, and signed `POST /github/webhook`. No live write yet. |
+| GitHub connector | `app/github/`, `scripts/check_github_access.py` | Issues, pull requests, and issue comments. Poll watermark, failure retry, and signed `POST /github/webhook`. `yuv008/portfolio` is in `co:real`. |
+| Excerpt index | `app/ingest/chunks.py` | After a successful Postgres page, embeds non-empty excerpts and deletes chunks for empty or deleted items. The model loads once. |
+| Slack profiles | `app/slack/client.py`, `app/slack/people.py` | `users.info` fills a display name. The `WEAVE_VIEWER_EMAIL` match moves authorship onto the email person id and sets level and department. |
+| Claims | `app/answer/claims.py`, `POST /claims/commitment`, `POST /claims/figure`, `POST /claims/supersede` | Caller-supplied commitment or figure. The quote must be in the excerpt. Supersede writes `change_event` and retires the old claim. |
 | Tests | `tests/test_normalize.py`, `tests/test_upsert.py`, `tests/test_slack_client.py`, `tests/test_worker.py`, `tests/test_events.py`, `tests/test_answer.py`, `tests/test_log.py`, `tests/test_notion.py`, `tests/test_drive.py`, `tests/test_github.py` | Checkpoint order, thread resume, stale versions, rejected signatures, tombstones, and cited answers for Slack, Notion, Drive, and GitHub. |
 
 Local check on 15 October 2026: `66 passed`. FalkorDB ran in Docker container `weave-falkordb`, host port `6380`. `.env.example` defaults the port to `6379`. Use `FALKORDB_PORT=6380` for that container.

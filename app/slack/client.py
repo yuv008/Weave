@@ -96,6 +96,19 @@ class SlackClient:
 
         return self.replies(channel_id, ts)
 
+    def user_profile(self, user_id: str) -> dict:
+        """Return a display name and email. The token stays in the header."""
+
+        payload = self._call("users.info", {"user": user_id})
+        user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+        profile = user.get("profile") if isinstance(user.get("profile"), dict) else {}
+        name = user.get("real_name") or profile.get("display_name") or ""
+        email = profile.get("email") or ""
+        return {
+            "name": name if isinstance(name, str) else "",
+            "email": email if isinstance(email, str) else "",
+        }
+
     def _call(self, method: str, params: dict[str, str], *, post: bool = False) -> dict:
         query = urllib.parse.urlencode(params)
         request_body = query.encode() if post else None

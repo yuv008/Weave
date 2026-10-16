@@ -70,6 +70,11 @@ sources:
     min_level: 0
     cascade_policy: manual
     authority: 2
+  "github:demo-org/sso-service":
+    name: "SSO service"
+    min_level: 0
+    cascade_policy: manual
+    authority: 2
   "slack:C0ENGLEADS":
     name: "#eng-leads"
     min_level: 2
@@ -106,3 +111,33 @@ sources:
     cascade_policy: manual
     authority: 2
     org_wide: true
+  "github:yuv008/Weave":
+    name: "Weave"
+    min_level: 0
+    cascade_policy: manual
+    authority: 2
+  "github:yuv008/portfolio":
+    name: "Portfolio"
+    min_level: 0
+    cascade_policy: manual
+    authority: 2
+  "slack:C0C90JZ4YMP":
+    name: "social"
+    min_level: 0
+    cascade_policy: manual
+    authority: 1
+  "slack:C0C9T2JTLJC":
+    name: "all-new-workspace"
+    min_level: 0
+    cascade_policy: manual
+    authority: 1
+  "notion:de87560e-92b0-81e5-b99a-000341cccd77":
+    name: "Notion workspace"
+    min_level: 0
+    cascade_policy: manual
+    authority: 3
+  "gdrive:1xAh9x70Ji3LLE0dPCxfdBWFxSRMkGdkN":
+    name: "Drive folder"
+    min_level: 0
+    cascade_policy: manual
+    authority: 3

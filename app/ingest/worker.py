@@ -9,7 +9,9 @@ import logging
 import os
 import time
 
+from app.graph.policy import allowed_source, slack_source_id
 from app.graph.upsert import ensure_indexes, upsert_message
+from app.ingest.chunks import index_source
 from app.ingest.log import log_page
 from app.ingest.records import open_store
 from app.ingest.state import (
@@ -79,7 +81,10 @@ def backfill_public_channels(
             )
         cursor = _next_cursor(page)
         if not cursor:
-            return
+            break
+    from app.slack.people import enrich_slack_authors
+
+    enrich_slack_authors(graph, client, tenant_id)
 
 
 def retry_failures(graph, client, *, workspace_domain: str | None = None, store=None) -> None:
@@ -163,6 +168,10 @@ def _sync_channel(
     incremental: bool,
     store,
 ) -> None:
+    found = allowed_source("slack", channel_id)
+    if found is None:
+        return
+    group, _policy = found
     sync_id = channel_sync_id(tenant_id, workspace_id, channel_id)
     state = read_channel_sync(store, sync_id)
     if state["status"] == "complete" and not incremental:
@@ -257,6 +266,9 @@ def _sync_channel(
                 "last_error_class": "",
             },
         )
+        source = slack_source_id(tenant_id, workspace_id, channel_id)
+        store.note_source_sync(tenant_id, source, group)
+        index_source(graph, store, source)
         log_page(
             logger,
             tenant_id=tenant_id,

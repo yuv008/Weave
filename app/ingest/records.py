@@ -16,6 +16,7 @@ SLACK_EVENT = "slack_event"
 class MemoryStore:
     def __init__(self) -> None:
         self.rows: dict[str, dict] = {}
+        self.changes: list[dict] = []
 
     def get(self, record_id: str) -> dict | None:
         row = self.rows.get(record_id)
@@ -50,6 +51,33 @@ class MemoryStore:
 
     def list_kind(self, kind: str) -> list[dict]:
         return [self.get(row["id"]) for row in self.rows.values() if row["kind"] == kind]
+
+    def note_source_sync(self, tenant_id: str, source_id: str, acl_group: str) -> None:
+        return
+
+    def __init_chunks(self) -> dict:
+        chunks = getattr(self, "_chunks", None)
+        if chunks is None:
+            chunks = {}
+            self._chunks = chunks
+        return chunks
+
+    def replace_chunks(self, rows: list[dict]) -> None:
+        chunks = self.__init_chunks()
+        for row in rows:
+            chunks[row["id"]] = row
+
+    def delete_chunks(self, item_ids: list[str]) -> None:
+        chunks = self.__init_chunks()
+        drop = {f"{item_id}:chunk:0" for item_id in item_ids}
+        for chunk_id in list(chunks):
+            if chunk_id in drop:
+                del chunks[chunk_id]
+
+    def record_change(self, tenant_id: str, fact_id: str, kind: str, new_fact_id: str) -> None:
+        self.changes.append(
+            {"id": f"{fact_id}:{kind}", "tenant_id": tenant_id, "fact_id": fact_id, "kind": kind, "new_fact_id": new_fact_id}
+        )
 
 
 class PostgresStore:
@@ -94,6 +122,77 @@ class PostgresStore:
 
     def delete(self, record_id: str) -> None:
         self._run("DELETE FROM ingest_record WHERE id = %s", (record_id,))
+
+    def note_source_sync(self, tenant_id: str, source_id: str, acl_group: str) -> None:
+        self._run(
+            """
+            INSERT INTO source_sync (tenant_id, source_id, acl_group, last_good_sync_at)
+            VALUES (%s, %s, %s, now())
+            ON CONFLICT (tenant_id, source_id) DO UPDATE SET
+              acl_group = EXCLUDED.acl_group,
+              last_good_sync_at = now()
+            """,
+            (tenant_id, source_id, acl_group),
+        )
+
+    def replace_chunks(self, rows: list[dict]) -> None:
+        if not rows:
+            return
+        from fixtures.seed import vector_literal
+        from shared.pg import connect_pg
+
+        conn = connect_pg(url=self.dsn)
+        try:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO chunk (id, tenant_id, item_id, ordinal, text, embedding, acl_groups, min_level)
+                    VALUES (%s, %s, %s, 0, %s, %s::vector, %s, %s)
+                    ON CONFLICT (id) DO UPDATE SET
+                      text = EXCLUDED.text,
+                      embedding = COALESCE(EXCLUDED.embedding, chunk.embedding),
+                      acl_groups = EXCLUDED.acl_groups,
+                      min_level = EXCLUDED.min_level
+                    """,
+                    [
+                        (
+                            row["id"],
+                            row["tenant_id"],
+                            row["item_id"],
+                            row["text"],
+                            vector_literal(row.get("embedding")),
+                            row["acl_groups"],
+                            row["min_level"],
+                        )
+                        for row in rows
+                    ],
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def delete_chunks(self, item_ids: list[str]) -> None:
+        if not item_ids:
+            return
+        from shared.pg import connect_pg
+
+        conn = connect_pg(url=self.dsn)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM chunk WHERE item_id = ANY(%s)", (item_ids,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def record_change(self, tenant_id: str, fact_id: str, kind: str, new_fact_id: str) -> None:
+        self._run(
+            """
+            INSERT INTO change_event (id, tenant_id, fact_id, kind, new_fact_id)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (f"{fact_id}:{kind}", tenant_id, fact_id, kind, new_fact_id),
+        )
 
     def list_kind(self, kind: str) -> list[dict]:
         from shared.pg import connect_pg

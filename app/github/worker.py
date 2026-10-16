@@ -6,7 +6,9 @@ from datetime import UTC, datetime
 
 from app.github.client import GitHubRequestError
 from app.github.normalize import normalize_github_comment, normalize_github_issue
+from app.graph.policy import allowed_source, github_source_id
 from app.graph.upsert import ensure_indexes
+from app.ingest.chunks import index_source
 from app.graph.upsert_document import upsert_document
 from app.ingest.log import format_github_log
 from app.ingest.records import SYNC_FAILURE, SYNC_STATE, open_store
@@ -38,6 +40,10 @@ def github_failure_id(tenant_id: str, repo_id: str, external_id: str) -> str:
 
 
 def poll_repository(tenant_id: str, connection_id: str, owner: str, repo: str, client, graph, store=None) -> None:
+    found = allowed_source("github", f"{owner}/{repo}")
+    if found is None:
+        return
+    group, _policy = found
     records = open_store(store)
     ensure_indexes(graph)
     repo_payload = client.get_repo(owner, repo).payload
@@ -124,6 +130,9 @@ def poll_repository(tenant_id: str, connection_id: str, owner: str, repo: str, c
                 "last_error_class": "",
             },
         )
+        source = github_source_id(tenant_id, f"{owner}/{repo}")
+        records.note_source_sync(tenant_id, source, group)
+        index_source(graph, records, source)
         _log(tenant_id, repo_id, len(issues), 0, started, "")
         if finished:
             return

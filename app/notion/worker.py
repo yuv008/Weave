@@ -3,7 +3,9 @@
 import logging
 import time
 
+from app.graph.policy import allowed_source, notion_source_id
 from app.graph.upsert import ensure_indexes
+from app.ingest.chunks import index_source
 from app.graph.upsert_document import upsert_document
 from app.ingest.log import format_document_log
 from app.ingest.records import SYNC_FAILURE, open_store
@@ -25,6 +27,10 @@ def notion_failure_id(tenant_id: str, page_id: str) -> str:
 
 
 def poll_shared_pages(tenant_id: str, connection_id: str, workspace_id: str, client, graph, store=None) -> None:
+    found = allowed_source("notion", workspace_id)
+    if found is None:
+        return
+    group, _policy = found
     records = open_store(store)
     ensure_indexes(graph)
     write_connection(
@@ -104,6 +110,9 @@ def poll_shared_pages(tenant_id: str, connection_id: str, workspace_id: str, cli
                 "last_error_class": "",
             },
         )
+        source = notion_source_id(tenant_id, workspace_id)
+        records.note_source_sync(tenant_id, source, group)
+        index_source(graph, records, source)
         logger.info(
             "%s",
             format_document_log(

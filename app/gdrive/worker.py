@@ -6,7 +6,9 @@ from datetime import UTC, datetime
 
 from app.gdrive.client import DOC_MIME
 from app.gdrive.normalize import normalize_drive_file
+from app.graph.policy import allowed_source, drive_source_id
 from app.graph.upsert import ensure_indexes
+from app.ingest.chunks import index_source
 from app.graph.upsert_document import upsert_document
 from app.ingest.log import format_document_log
 from app.ingest.records import SYNC_FAILURE, SYNC_STATE, open_store
@@ -26,6 +28,10 @@ def drive_failure_id(tenant_id: str, file_id: str) -> str:
 
 
 def poll_folder(tenant_id: str, connection_id: str, folder_id: str, client, graph, store=None) -> None:
+    found = allowed_source("gdrive", folder_id)
+    if found is None:
+        return
+    group, _policy = found
     records = open_store(store)
     ensure_indexes(graph)
     write_connection(
@@ -90,6 +96,9 @@ def poll_folder(tenant_id: str, connection_id: str, folder_id: str, client, grap
                 "last_error_class": "",
             },
         )
+        source = drive_source_id(tenant_id, folder_id)
+        records.note_source_sync(tenant_id, source, group)
+        index_source(graph, records, source)
         logger.info(
             "%s",
             format_document_log(

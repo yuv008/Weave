@@ -138,26 +138,29 @@ def test_drive_checkpoint_survives_a_crash_and_replay_does_not_duplicate(graph):
     client = _Folder()
     store = MemoryStore()
     with pytest.raises(RuntimeError, match="stop after page 1"):
-        poll_folder("demo", "gdrive-main", "folder1", client, graph, store)
-    payload = store.get(drive_sync_id("demo", "folder1"))["payload"]
+        poll_folder("demo", "gdrive-main", "F0BUDGET", client, graph, store)
+    payload = store.get(drive_sync_id("demo", "F0BUDGET"))["payload"]
     assert payload.get("page_token") == "page-2"
     assert payload.get("status") == "in_progress"
     client.stop = False
-    poll_folder("demo", "gdrive-main", "folder1", client, graph, store)
+    poll_folder("demo", "gdrive-main", "F0BUDGET", client, graph, store)
     count = graph.query(
         "MATCH (d:Document) WHERE d.source = 'gdrive' AND d.tenant_id = 'demo' RETURN count(d)"
     ).result_set[0][0]
-    assert count == 0
-    poll_folder("demo", "gdrive-main", "folder1", client, graph, store)
+    assert count == 2
+    poll_folder("demo", "gdrive-main", "F0BUDGET", client, graph, store)
     assert (
         graph.query(
             "MATCH (d:Document) WHERE d.source = 'gdrive' AND d.tenant_id = 'demo' RETURN count(d)"
         ).result_set[0][0]
-        == 0
+        == 2
     )
 
 
 def test_unknown_drive_folder_is_not_written(graph):
     assert upsert_document(graph, _doc()).applied is False
+    store = MemoryStore()
+    poll_folder("demo", "gdrive-main", "folder1", _Folder(), graph, store)
+    assert store.get(drive_sync_id("demo", "folder1")) is None
     answer = answer_drive_question(graph, "demo", "folder1", "annual plan")
     assert answer.citations == ()

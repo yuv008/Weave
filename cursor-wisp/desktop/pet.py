@@ -1712,11 +1712,15 @@ class DraftWatch:
         self._lines = queue.Queue()
         self._lock = threading.Lock()
         self._token = ""
+        self._cue_url = "http://127.0.0.1:8765/wisp/cue"
         self._missed = False
         threading.Thread(target=self._warm, name="wisp-warm", daemon=True).start()
         threading.Thread(target=self._loop, name="wisp-draft", daemon=True).start()
 
     def _load_token(self):
+        if self._token:
+            return self._token
+        self._load_local_config()
         if self._token:
             return self._token
         for name in (".env.local", ".env", ".env.tokens"):
@@ -1734,7 +1738,24 @@ class DraftWatch:
                 key, value = stripped.split("=", 1)
                 os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
         self._token = os.environ.get("WEAVE_VIEWER_TOKEN") or os.environ.get("WEAVE_TOKEN_SAM") or ""
+        if os.environ.get("WEAVE_CUE_URL") and self._cue_url == "http://127.0.0.1:8765/wisp/cue":
+            self._cue_url = os.environ["WEAVE_CUE_URL"]
         return self._token
+
+    def _load_local_config(self):
+        path = Path(__file__).with_name("pet.config.json")
+        if not path.is_file():
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(data, dict):
+            return
+        if data.get("token"):
+            self._token = str(data["token"])
+        if data.get("cue_url"):
+            self._cue_url = str(data["cue_url"])
 
     def _start(self):
         if self._proc and self._proc.poll() is None:
@@ -1824,7 +1845,7 @@ class DraftWatch:
 
     def fast_cue(self, prompt, timeout=2):
         """Stored excerpt for the card. The caller is not waiting on a model."""
-        return self._post_json("http://127.0.0.1:8765/wisp/cue", {"prompt": prompt}, timeout)
+        return self._post_json(self._cue_url, {"prompt": prompt}, timeout)
 
     def _warm(self):
         started = time.perf_counter()

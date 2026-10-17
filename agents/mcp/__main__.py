@@ -27,7 +27,14 @@ def main() -> None:
     from agents.answer.agent import build_agent
 
     app = build_app(runtime, agent=build_agent(runtime), host=args.host)
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        log_level="info",
+        proxy_headers=True,
+        forwarded_allow_ips="127.0.0.1",
+    )
 
 
 if __name__ == "__main__":

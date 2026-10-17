@@ -10,6 +10,9 @@ secrets/
 logs/
 cursor-wisp/desktop/webview-cache/
 cursor-wisp/desktop/pet.log
+cursor-wisp/desktop/pet.config.json
+cursor-wisp/desktop/wisp.port
+weave.egg-info/
 cursor-wisp/desktop/*.dll
 .neon
 node_modules/

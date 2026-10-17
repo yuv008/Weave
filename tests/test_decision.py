@@ -98,14 +98,23 @@ def test_twenty_first_match_is_absent(graph):
     assert _message("provider A at 1", "1").node_id not in ids
 
 
+def _allow(token: str) -> bool:
+    return token == "viewer"
+
+
 def _client(graph):
-    return TestClient(create_app(graph=graph, tenant_id=TENANT))
+    return TestClient(create_app(graph=graph, tenant_id=TENANT, viewer_auth=_allow))
+
+
+def _post(client, path, payload):
+    return client.post(path, headers={"authorization": "Bearer viewer"}, json=payload)
 
 
 def test_blank_quote_route_returns_400_without_a_query():
-    response = _client(_Recording()).post(
+    response = _post(
+        _client(_Recording()),
         "/slack/decisions",
-        json={"channel_id": CHANNEL, "statement": STATEMENT, "quote": " "},
+        {"channel_id": CHANNEL, "statement": STATEMENT, "quote": " "},
     )
 
     assert response.status_code == 400
@@ -115,9 +124,10 @@ def test_route_returns_the_decision_json(graph):
     message = _message("ship with provider A", "30")
     upsert_message(graph, message)
 
-    response = _client(graph).post(
+    response = _post(
+        _client(graph),
         "/slack/decisions",
-        json={"channel_id": CHANNEL, "statement": STATEMENT, "quote": QUOTE},
+        {"channel_id": CHANNEL, "statement": STATEMENT, "quote": QUOTE},
     )
 
     assert response.status_code == 200
@@ -128,9 +138,10 @@ def test_route_returns_the_decision_json(graph):
     assert body["decisions"][0]["evidence"]["source_url"] == message.source_url
     assert body["decisions"][0]["evidence"]["message_id"] == message.node_id
     assert _count(graph, "Decision") == 1
-    again = _client(graph).post(
+    again = _post(
+        _client(graph),
         "/slack/decisions",
-        json={"channel_id": CHANNEL, "statement": STATEMENT, "quote": QUOTE},
+        {"channel_id": CHANNEL, "statement": STATEMENT, "quote": QUOTE},
     )
     assert again.status_code == 200
     assert _count(graph, "Decision") == 1

@@ -10,6 +10,14 @@ Copy `.env.example` to `.env`. Put keys only in `.env`. That file is gitignored.
 
 On Neon, `DATABASE_URL` is the pooled endpoint. `DATABASE_URL_UNPOOLED` is the direct endpoint. Each Python process also keeps a small client pool in `shared/pg.py` (`psycopg-pool`) so repeated queries reuse an open connection to PgBouncer. Migrations and the watcher outbox still use the direct URL; normal agent, ingest, and Wisp cue traffic use the pooled URL. After upgrading dependencies, restart `python -m agents.mcp`, the webhook app, and `scripts/run_worker.py` if they are already running.
 
+## Connect
+
+The webhook app serves the setup page at `GET /`. A person saves a company name, connects Slack, Notion, Google Drive, or GitHub, and then chooses Open Weave. That mints a viewer token and a `pet.config.json` the desktop pet reads for its cue URL and token. HubSpot stays on the page and cannot be connected yet. Apply `migrations/008_connection_secret.sql` on the direct database, and set `WEAVE_SECRET_KEY` plus the provider client ids in `.env` (the names are in `.env.example`) before the buttons will leave this machine. Claim routes `POST /claims/*` and `POST /slack/decisions` require the viewer bearer token.
+
+## AWS
+
+The Sydney host is [docs/deployment.md](docs/deployment.md). One edge task serves the setup page, the webhooks, and the agent. One worker task runs `scripts/run_worker.py`. On 18 October 2026 the tasks and the load balancer were stopped. The images and the saved parameters remain. Starting again creates a new public hostname.
+
 ## Docker Compose
 
 `docker compose up` starts five services from `docker-compose.yml`: `api` on port 8765 (`python -m agents.mcp`), `worker` (`scripts/run_worker.py`), `web` on port 8080, `falkordb`, and `postgres`.

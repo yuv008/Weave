@@ -1,5 +1,7 @@
 # Deploy
 
+The AWS host is [docs/deployment.md](../docs/deployment.md): one edge task and one worker task in `ap-southeast-2`. On 18 October 2026 those tasks and the load balancer were stopped. This folder's Compose file is the local stack.
+
 `.env` is gitignored. `api` and `worker` load it with Compose `env_file` and `required: false`, so Compose 2.24 and newer still configure when the file is absent. Older Compose fails `docker compose config` until `.env` exists. Copy `.env.example` if you need a file, and do not commit real values.
 
 When the Compose FalkorDB and Postgres services are the stores, set `FALKORDB_HOST=falkordb` and point `DATABASE_URL` at host `postgres` (`postgresql://weave:weave@postgres:5432/weave`). A hosted `FALKORDB_URL` or `DATABASE_URL` already in `.env` is used as written. The Google Drive service-account file is not copied into the image. `worker` mounts `./secrets` read-only, which is the default path `secrets/gdrive-service-account.json`.

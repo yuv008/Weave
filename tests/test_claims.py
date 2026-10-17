@@ -9,6 +9,11 @@ from app.models.canonical import CanonicalMessage
 from app.slack.normalize import format_slack_version
 
 TENANT = "tenant1"
+AUTH = {"authorization": "Bearer viewer"}
+
+
+def _allow(token: str) -> bool:
+    return token == "viewer"
 
 
 def _message(excerpt: str) -> CanonicalMessage:
@@ -31,9 +36,10 @@ def _message(excerpt: str) -> CanonicalMessage:
 def test_missing_quote_is_rejected(graph):
     upsert_message(graph, _message("Ship the SSO work by Friday"))
     store = MemoryStore()
-    app = create_app(graph=graph, tenant_id=TENANT, store=store)
+    app = create_app(graph=graph, tenant_id=TENANT, store=store, viewer_auth=_allow)
     response = TestClient(app).post(
         "/claims/commitment",
+        headers=AUTH,
         json={
             "item_id": "tenant1:slack:message:C0ENGSSO:20",
             "statement": "Ship SSO",
@@ -49,7 +55,7 @@ def test_missing_quote_is_rejected(graph):
 def test_repeat_commitment_merges(graph):
     message = _message("Ship the SSO work by Friday")
     upsert_message(graph, message)
-    app = create_app(graph=graph, tenant_id=TENANT, store=MemoryStore())
+    app = create_app(graph=graph, tenant_id=TENANT, store=MemoryStore(), viewer_auth=_allow)
     client = TestClient(app)
     body = {
         "item_id": message.node_id,
@@ -58,8 +64,8 @@ def test_repeat_commitment_merges(graph):
         "due": "2026-10-20",
         "progress": "open",
     }
-    first = client.post("/claims/commitment", json=body)
-    second = client.post("/claims/commitment", json=body)
+    first = client.post("/claims/commitment", headers=AUTH, json=body)
+    second = client.post("/claims/commitment", headers=AUTH, json=body)
     assert first.status_code == 200
     assert second.json()["id"] == first.json()["id"]
     assert graph.query("MATCH (c:Commitment) RETURN count(c)").result_set[0][0] == 1
@@ -69,10 +75,11 @@ def test_supersede_writes_one_event_and_retires_the_old_claim(graph):
     message = _message("The budget is 12 percent")
     upsert_message(graph, message)
     store = MemoryStore()
-    app = create_app(graph=graph, tenant_id=TENANT, store=store)
+    app = create_app(graph=graph, tenant_id=TENANT, store=store, viewer_auth=_allow)
     client = TestClient(app)
     created = client.post(
         "/claims/figure",
+        headers=AUTH,
         json={
             "item_id": message.node_id,
             "name": "budget",
@@ -84,6 +91,7 @@ def test_supersede_writes_one_event_and_retires_the_old_claim(graph):
     )
     replaced = client.post(
         "/claims/supersede",
+        headers=AUTH,
         json={
             "old_id": created.json()["id"],
             "kind": "figure",
@@ -97,6 +105,7 @@ def test_supersede_writes_one_event_and_retires_the_old_claim(graph):
     )
     again = client.post(
         "/claims/supersede",
+        headers=AUTH,
         json={
             "old_id": created.json()["id"],
             "kind": "figure",
@@ -117,3 +126,14 @@ def test_supersede_writes_one_event_and_retires_the_old_claim(graph):
         {"id": created.json()["id"]},
     ).result_set[0][0]
     assert status == "superseded"
+
+
+def test_claim_without_a_token_is_rejected(graph):
+    app = create_app(graph=graph, tenant_id=TENANT, store=MemoryStore())
+    response = TestClient(app).post("/claims/commitment", json={"item_id": "x"})
+    assert response.status_code == 401
+    response = TestClient(app).post(
+        "/slack/decisions",
+        json={"channel_id": "C1", "statement": "Ship", "quote": "Ship"},
+    )
+    assert response.status_code == 401

@@ -139,9 +139,10 @@ class GitHubClient:
 
 
 def github_client_from_env() -> GitHubClient:
-    token = os.environ.get("GITHUB_TOKEN", "")
+    from app.connect.credentials import github_access_token
+
     version = os.environ.get("GITHUB_API_VERSION", "").strip() or PINNED_GITHUB_API_VERSION
-    return GitHubClient(token, api_version=version)
+    return GitHubClient(github_access_token(), api_version=version)
 
 
 def _segment(value: str) -> str:

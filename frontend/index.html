@@ -1,549 +1,248 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Weave</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="icon" href="icon.png">
 <style>
   :root {
     --bg: #0B0F1A;
-    --raise: rgba(18, 24, 42, 0.86);
-    --side: rgba(8, 11, 22, 0.72);
-    --line: rgba(248, 250, 252, 0.1);
+    --card: #12182A;
+    --line: rgba(248, 250, 252, 0.12);
     --text: #F8FAFC;
     --muted: #A8B3C7;
-    --faint: #7C8AA0;
     --purple: #7C3AED;
     --blue: #3B82F6;
-    --sky: #60A5FA;
-    --lavender: #C4B5FD;
     --good: #86EFAC;
     --warn: #FCD34D;
-    --grad: linear-gradient(100deg, #7C3AED 0%, #3B82F6 100%);
-    color-scheme: dark;
-  }
-  html[data-theme="light"] {
-    --bg: #F8FAFC;
-    --raise: rgba(255, 255, 255, 0.92);
-    --side: rgba(255, 255, 255, 0.78);
-    --line: rgba(11, 15, 26, 0.08);
-    --text: #0B0F1A;
-    --muted: #3E4A63;
-    --faint: #64748B;
-    color-scheme: light;
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; min-height: 100%; }
   body {
-    font-family: "Plus Jakarta Sans", "Segoe UI", system-ui, sans-serif;
+    margin: 0;
+    min-height: 100vh;
     background: var(--bg);
     color: var(--text);
-    letter-spacing: -0.02em;
+    font: 16px/1.5 "Segoe UI", sans-serif;
   }
-  button, input, select { font: inherit; color: inherit; }
-  button { cursor: pointer; }
-  a { color: var(--sky); text-decoration: none; }
-  .atmosphere, .atmosphere-b {
-    position: fixed; inset: auto; pointer-events: none; z-index: 0;
-  }
-  .atmosphere { top: -180px; right: -220px; width: 820px; height: 820px; background: radial-gradient(circle, rgba(124,58,237,0.38), transparent 62%); filter: blur(8px); }
-  .atmosphere-b { left: 180px; bottom: -280px; width: 720px; height: 720px; background: radial-gradient(circle, rgba(59,130,246,0.22), transparent 64%); }
-  .waves { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; opacity: 0.55; }
-  .app { position: relative; z-index: 1; display: grid; grid-template-columns: 272px 1fr; min-height: 100vh; }
-  .side {
-    position: sticky; top: 0; height: 100vh;
-    display: flex; flex-direction: column; gap: 28px;
-    padding: 28px 18px 20px;
-    background: var(--side);
-    border-right: 1px solid var(--line);
-    backdrop-filter: blur(22px);
-  }
-  .brand { padding: 0 8px; }
-  .lockup { display: flex; align-items: center; gap: 12px; }
-  .lockup img { width: 48px; height: 48px; display: block; border-radius: 14px; box-shadow: 0 0 0 1px rgba(248, 250, 252, 0.16); }
-  .word { font-size: 28px; font-weight: 650; letter-spacing: -0.05em; line-height: 1; }
-  .tagline { margin: 10px 0 0; color: var(--faint); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; line-height: 1.45; }
-  nav { display: flex; flex-direction: column; gap: 6px; }
-  nav button {
-    display: flex; align-items: center; gap: 12px;
-    text-align: left; border: 0; background: transparent;
-    border-radius: 14px; padding: 12px 14px; color: var(--muted);
-  }
-  nav button svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.7; flex: none; }
-  nav button[aria-current="page"] {
-    color: white;
-    background: var(--grad);
-    box-shadow: 0 10px 28px rgba(59, 130, 246, 0.28);
-  }
-  .who { margin-top: auto; padding: 14px; border: 1px solid var(--line); border-radius: 18px; background: var(--raise); }
-  .who-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-  .avatar {
-    width: 36px; height: 36px; border-radius: 12px;
-    display: grid; place-items: center; color: white; font-weight: 650;
-    background: var(--grad); flex: none;
-  }
-  .who strong { display: block; font-size: 14px; }
-  .who .meta, .meta { color: var(--muted); font-size: 13px; line-height: 1.45; }
-  select, .theme {
-    width: 100%; background: transparent; border: 1px solid var(--line);
-    border-radius: 12px; padding: 9px 10px;
-  }
-  .theme { width: auto; margin-top: 8px; color: var(--muted); }
-  .stage { padding: 36px 56px 80px; max-width: 1180px; }
-  :focus-visible { outline: 2px solid var(--sky); outline-offset: 3px; }
-  .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 28px; color: var(--faint); font-size: 13px; }
-  .pill {
-    border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px;
-    background: var(--raise); color: var(--lavender);
-  }
-  .kicker { margin: 0 0 8px; color: var(--lavender); font-size: 13px; font-weight: 600; }
-  h1 { margin: 0 0 12px; font-size: clamp(36px, 4vw, 52px); font-weight: 650; letter-spacing: -0.045em; line-height: 1.02; max-width: 18ch; }
-  .lede { margin: 0 0 22px; max-width: 38rem; color: var(--muted); font-size: 17px; line-height: 1.5; }
-  .hero { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 8px; align-items: end; }
-  .pet-pad { position: relative; height: 148px; pointer-events: none; }
-  .pet {
-    position: absolute; left: 4px; top: 0; width: 96px; height: 120px;
-    border: 0; background: transparent; animation: wander 6.5s ease-in-out infinite;
-  }
-  .pet svg { width: 100%; height: 100%; display: block; overflow: visible; background: transparent; }
-  .pet.listening { animation: lean 0.7s ease-in-out infinite; }
-  .pet.typing { animation: none; transform: translate(8px, 18px); }
-  @keyframes wander { 0%,100% { transform: translate(0,0); } 40% { transform: translate(22px, 14px); } 70% { transform: translate(-8px, 8px); } }
-  @keyframes lean { 50% { transform: translate(4px, 20px) scale(1.04); } }
-  @media (prefers-reduced-motion: reduce) {
-    .pet { animation: none; }
-  }
-  .ask {
-    display: flex; gap: 8px; align-items: center;
-    padding: 8px; border-radius: 22px;
-    background: var(--grad);
-    box-shadow: 0 20px 50px rgba(59, 130, 246, 0.18);
-  }
-  .ask input {
-    flex: 1; border: 0; outline: none; background: var(--bg); color: var(--text);
-    border-radius: 16px; padding: 16px 18px; font-size: 16px;
-  }
-  .ask button, .go {
-    border: 0; border-radius: 14px; padding: 14px 18px; color: white; background: transparent; font-weight: 600;
-  }
-  .ask .mic { background: rgba(255,255,255,0.16); }
-  .ask .mic[aria-pressed="true"] { background: white; color: #0B0F1A; }
-  .voice-note { min-height: 1.2em; margin: 8px 2px 0; color: var(--faint); font-size: 13px; }
-  .prompts, .grid, .people, .split { display: grid; gap: 14px; }
-  .prompts { grid-template-columns: repeat(3, 1fr); margin-top: 16px; }
-  .prompt, .card, .cite, .source, .person, .node {
-    border: 1px solid var(--line); background: var(--raise); border-radius: 20px;
-    backdrop-filter: blur(16px); text-align: left;
-  }
-  .prompt { padding: 16px 16px 18px; }
-  .prompt:hover, .cite:hover, .source:hover, .person:hover, .row:hover { border-color: color-mix(in srgb, var(--sky) 55%, var(--line)); }
-  .prompt span { display: block; }
-  .prompt b { font-weight: 560; font-size: 15px; line-height: 1.35; }
-  .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 32px 0 12px; }
-  .section-head h2 { margin: 0; font-size: 18px; color: var(--text); font-weight: 640; letter-spacing: -0.03em; }
-  .count { color: var(--lavender); font-size: 13px; }
-  .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 22px; }
-  .metric { padding: 16px 18px 14px; border-radius: 18px; border: 1px solid var(--line); background: var(--raise); }
-  .metric b { display: block; font-size: 32px; letter-spacing: -0.05em; line-height: 1; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .metric span { display: block; margin-top: 8px; color: var(--faint); font-size: 14px; }
-  .crumb { display: flex; gap: 8px; align-items: center; color: var(--faint); font-size: 13px; margin-bottom: 8px; }
-  .crumb b { color: var(--text); font-weight: 560; }
-  .group { margin-top: 8px; }
-  .group h3 { margin: 22px 0 10px; font-size: 16px; color: var(--lavender); font-weight: 640; }
-  .pips { display: flex; gap: 4px; margin-top: 8px; }
-  .pips i { width: 18px; height: 4px; border-radius: 99px; background: var(--line); display: block; }
-  .pips i.on { background: var(--grad); }
-  .tree { list-style: none; margin: 8px 0 0; padding: 4px 0 4px 22px; border-left: 2px solid #7C3AED; }
-  .tree li { position: relative; margin: 0 0 12px; }
-  .tree li::before { content: ""; position: absolute; left: -28px; top: 22px; width: 12px; height: 12px; border-radius: 99px; background: var(--grad); box-shadow: 0 0 0 4px var(--bg); }
-  .idx { font-variant-numeric: tabular-nums; font-weight: 650; color: var(--lavender); font-size: 13px; padding-top: 2px; }
-  .list, .stack { display: flex; flex-direction: column; gap: 10px; }
-  .cite, .source, .person, .row { padding: 16px 18px; width: 100%; color: inherit; }
-  .cite { display: grid; grid-template-columns: 28px 42px 1fr; gap: 12px; align-items: start; }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 20px 80px; }
+  h1 { font-size: 2rem; margin: 0 0 8px; }
+  h2 { font-size: 1.1rem; margin: 32px 0 12px; }
+  p { color: var(--muted); }
   .mark {
-    width: 42px; height: 42px; border-radius: 14px; display: grid; place-items: center;
-    font-weight: 700; background: rgba(124, 58, 237, 0.2); color: var(--lavender);
+    width: 36px; height: 36px; border-radius: 10px; margin-bottom: 16px;
+    background: linear-gradient(120deg, var(--purple), var(--blue));
   }
-  .mark[data-sys="slack"], .source[data-sys="slack"] { --sys: #E01E5A; }
-  .mark[data-sys="github"], .source[data-sys="github"] { --sys: #3FB950; }
-  .mark[data-sys="notion"], .source[data-sys="notion"] { --sys: #F7F6F3; }
-  .mark[data-sys="gdrive"], .source[data-sys="gdrive"] { --sys: #8AB4F8; }
-  .mark[data-sys] { background: color-mix(in srgb, var(--sys) 22%, transparent); color: var(--sys); }
-  .source[data-sys] { box-shadow: inset 3px 0 0 var(--sys); }
-  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: -8px 0 18px; }
-  .chips span { border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; color: var(--muted); font-size: 13px; }
-  .feature { width: 100%; margin-top: 18px; padding: 22px 24px; text-align: left; border-radius: 22px; border: 1px solid var(--line); background: var(--raise); position: relative; overflow: hidden; }
-  .feature::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--grad); }
-  .feature strong { display: block; margin-top: 6px; font-size: 26px; letter-spacing: -0.04em; }
-  .quote { margin: 8px 0 0; line-height: 1.45; }
-  .card { padding: 26px 28px; position: relative; overflow: hidden; }
-  .card::before {
-    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--grad);
+  form, .card, .result {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+    margin-top: 12px;
   }
-  .card h2, .node strong, .cite strong, .source strong, .person strong, .row strong { letter-spacing: -0.03em; }
-  .card h2 { margin: 10px 0 8px; font-size: 30px; line-height: 1.15; }
-  .tag {
-    display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 10px;
-    font-size: 13px; font-weight: 600;
-    color: var(--lavender); border: 1px solid color-mix(in srgb, var(--lavender) 45%, transparent);
+  label { display: block; margin-bottom: 6px; }
+  input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--text);
   }
-  .tag.good { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, transparent); }
-  .tag.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
-  .split { grid-template-columns: 1.05fr 0.95fr; align-items: start; }
-  .grid { grid-template-columns: 1fr 1fr; }
-  .source { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
-  .source[disabled] { opacity: 0.45; cursor: default; }
-  .people { grid-template-columns: 1fr 1fr; }
-  .person { display: flex; gap: 14px; align-items: center; }
-  .person .avatar { width: 48px; height: 48px; border-radius: 16px; font-size: 18px; }
-  .person[data-on="1"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sky) 70%, transparent); }
-  .trace { display: flex; flex-wrap: wrap; gap: 0; align-items: stretch; margin-top: 8px; }
-  .node { padding: 18px 18px 16px; min-width: 190px; max-width: 280px; }
-  .node .kicker { margin-bottom: 6px; }
-  .join {
-    width: 42px; align-self: center; height: 2px;
-    background: var(--grad); border-radius: 99px;
+  button, .button {
+    display: inline-block;
+    margin-top: 12px;
+    padding: 8px 14px;
+    border: 0;
+    border-radius: 8px;
+    background: linear-gradient(100deg, var(--purple), var(--blue));
+    color: white;
+    text-decoration: none;
+    cursor: pointer;
   }
-  .empty { color: var(--muted); }
-  @media (max-width: 980px) {
-    .app { grid-template-columns: 1fr; }
-    .side { position: relative; height: auto; }
-    .stage { padding: 24px 18px 48px; }
-    .prompts, .split, .grid, .people, .metrics, .hero { grid-template-columns: 1fr; }
-    .pet-pad { height: 110px; }
-    h1 { font-size: 36px; }
+  button[disabled], .button[aria-disabled="true"] {
+    background: #2A3148;
+    color: var(--muted);
+    cursor: not-allowed;
+    pointer-events: none;
   }
+  .card { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+  .status { font-size: 0.9rem; color: var(--muted); }
+  .status.connected, .status.syncing { color: var(--good); }
+  .status.failed { color: var(--warn); }
+  pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: #0B0F1A;
+    padding: 12px;
+    border-radius: 8px;
+  }
+  .error { color: var(--warn); }
 </style>
 </head>
 <body>
-<div class="atmosphere"></div>
-<div class="atmosphere-b"></div>
-<svg class="waves" viewBox="0 0 1440 900" preserveAspectRatio="none" aria-hidden="true">
-  <defs>
-    <linearGradient id="wave" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#7C3AED" stop-opacity="0.55"/>
-      <stop offset="1" stop-color="#3B82F6" stop-opacity="0.15"/>
-    </linearGradient>
-  </defs>
-  <path d="M-40 160C220 40 420 300 760 150C1100 0 1280 80 1500 210" fill="none" stroke="url(#wave)" stroke-width="70"/>
-  <path d="M-80 430C180 300 460 560 860 390C1180 250 1320 300 1520 470" fill="none" stroke="url(#wave)" stroke-width="36" opacity="0.7"/>
-</svg>
-<div class="app">
-  <aside class="side">
-    <div class="brand">
-      <div class="lockup">
-        <img src="icon.png" alt="" width="48" height="48">
-        <div class="word">Weave</div>
-      </div>
-      <p class="tagline">Connected knowledge.<br>For everyone.</p>
-    </div>
-    <nav id="nav">
-      <button type="button" data-screen="ask"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M16 16l5 5"/></svg>Ask</button>
-      <button type="button" data-screen="sources"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></svg>Sources</button>
-      <button type="button" data-screen="decisions"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/></svg>Decisions</button>
-      <button type="button" data-screen="people"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.6-3 2.8-4.5 5.5-4.5S14 16 14.5 19"/><circle cx="17" cy="9" r="2.2"/><path d="M16 14.6c2.2.3 3.8 1.6 4.4 4.4"/></svg>People</button>
-      <button type="button" data-screen="path"><svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.2"/><circle cx="18" cy="7" r="2.2"/><circle cx="18" cy="17" r="2.2"/><path d="M8 12h6M14 12l2.2-3.6M14 12l2.2 3.6"/></svg>Evidence</button>
-    </nav>
-    <div class="who">
-      <div class="who-row">
-        <div class="avatar" id="avatar">S</div>
-        <div><strong id="who-name">Sam</strong><span class="meta" id="who-role">Engineering · level 0</span></div>
-      </div>
-      <label class="meta" for="person">Viewing as</label>
-      <select id="person"></select>
-      <button class="theme" id="theme" type="button">Light</button>
-    </div>
-  </aside>
-  <section class="stage">
-    <div class="top"><span class="pill">Acme</span><span>Sample company. Live tools are not connected yet.</span></div>
-    <main id="main"></main>
-  </section>
-</div>
-<script>
-const people = {
-  sam: { name: "Sam", dept: "Engineering", level: 0, reports: "Maya", sources: ["eng", "github"] },
-  maya: { name: "Maya", dept: "Engineering", level: 2, reports: "—", sources: ["eng", "github", "leaders"] },
-  dev: { name: "Dev", dept: "Engineering", level: 1, reports: "Maya", sources: ["eng", "github"] },
-  priya: { name: "Priya", dept: "Sales", level: 1, reports: "Rohan", sources: ["deal", "notion", "github"] },
-  rohan: { name: "Rohan", dept: "Sales", level: 3, reports: "—", sources: ["deal", "leaders"] },
-};
-const sources = [
-  { id: "eng", name: "#eng-sso", system: "Slack", sys: "slack", detail: "Public channel · level 0" },
-  { id: "deal", name: "#deal-acme", system: "Slack", sys: "slack", detail: "Deal channel · level 0" },
-  { id: "leaders", name: "#leadership", system: "Slack", sys: "slack", detail: "Leaders only · level 2" },
-  { id: "github", name: "demo-org/sso-service", system: "GitHub", sys: "github", detail: "Issues and pull requests" },
-  { id: "notion", name: "Sales deals", system: "Notion", sys: "notion", detail: "Shared teamspace" },
-];
-const items = {
-  chooseA: { source: "eng", author: "dev", when: "3 Oct 2026", title: "Provider A proposal", quote: "Proposal for the SSO endpoint: we go with Provider A. Their SAML setup is the quickest for the Acme timeline.", url: "https://weave-demo.slack.com/archives/C0ENGSSO" },
-  agreeA: { source: "eng", author: "maya", when: "3 Oct 2026", title: "Maya agrees", quote: "Agreed, Provider A it is. Dev owns the integration.", url: "https://weave-demo.slack.com/archives/C0ENGSSO" },
-  switchB: { source: "eng", author: "dev", when: "12 Oct 2026", title: "Move to Provider B", quote: "Update: Provider A is out. Their SAML support cannot do per-tenant certificates. We are moving SSO to Provider B.", url: "https://weave-demo.slack.com/archives/C0ENGSSO" },
-  promise: { source: "deal", author: "priya", when: "5 Oct 2026", title: "Acme go-live promise", quote: "Confirmed with Acme on the call: SSO will be live for them by Nov 15, ahead of the renewal.", url: "https://weave-demo.slack.com/archives/C0DEALACME" },
-  budget: { source: "leaders", author: "rohan", when: "1 Oct 2026", title: "Q4 budget lock", quote: "Q4 platform budget is locked at $250k. Please do not share outside this channel.", url: "https://weave-demo.slack.com/archives/C0LEADERS" },
-  priority: { source: "leaders", author: "rohan", when: "2 Oct 2026", title: "Q4 priority", quote: "Q4 priority: SSO ships before any new feature work. Maya, please make sure the team knows.", url: "https://weave-demo.slack.com/archives/C0LEADERS" },
-  issue: { source: "github", author: "dev", when: "12 Oct 2026", title: "Issue 42 · SSO integration", quote: "SSO integration. Status: in progress. Provider switched from A to B on Oct 12; target date under review.", url: "https://github.com/demo-org/sso-service/issues/42" },
-  notion: { source: "notion", author: "priya", when: "6 Oct 2026", title: "Acme Corp renewal", quote: "Acme Corp renewal. ARR $120,000. Renewal date Dec 1. Blocker: SSO must be live before renewal.", url: "https://www.notion.so/acme-renewal-page" },
-};
-const decisions = [
-  { id: "b", statement: "Use Provider B for SSO.", status: "active", by: "dev", when: "12 Oct 2026", evidence: ["switchB", "issue"], about: "sso" },
-  { id: "a", statement: "Use Provider A for SSO.", status: "superseded", by: "dev", when: "3 Oct 2026", evidence: ["chooseA", "agreeA"], about: "sso" },
-  { id: "q4", statement: "SSO ships before any new feature work in Q4.", status: "active", by: "rohan", when: "2 Oct 2026", evidence: ["priority"], about: "priority" },
-];
-const prompts = [
-  ["Decision", "Why did we change SSO providers?"],
-  ["Commitment", "What did we promise Acme?"],
-  ["Figure", "What is the Q4 platform budget?"],
-];
-const state = { screen: "ask", person: "sam", item: "switchB", decision: "b", query: "" };
-const me = () => people[state.person];
-const can = (source) => me().sources.includes(source);
-const visibleItem = (id) => can(items[id].source);
-const visibleDecision = (d) => d.evidence.some(visibleItem);
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const srcOf = (id) => sources.find((s) => s.id === items[id].source);
+<main>
+  <div class="mark" aria-hidden="true"></div>
+  <h1>Set up Weave</h1>
+  <p>Connect the tools your company already uses. One connection is enough to start. Weave does not show excerpts on this page.</p>
 
-function cite(id, n) {
-  const item = items[id];
-  const src = srcOf(id);
-  const num = String(n).padStart(2, "0");
-  return `<button class="cite" type="button" data-item="${id}"><span class="idx">${num}</span><span class="mark" data-sys="${src.sys}">${esc(src.system[0])}</span><span><span class="kicker">${esc(src.system)} · ${esc(src.name)}</span><p class="quote">“${esc(item.quote)}”</p><span class="meta">${esc(item.title)} · ${esc(people[item.author].name)} · ${esc(item.when)}</span></span></button>`;
-}
-function head(title, n) {
-  return `<div class="section-head"><h2>${title}</h2><span class="count">${n}</span></div>`;
-}
-function pips(level) {
-  return `<span class="pips" aria-hidden="true">${[0, 1, 2, 3].map((i) => `<i class="${i < level ? "on" : ""}"></i>`).join("")}</span>`;
-}
-function answerFor(q) {
-  const text = q.toLowerCase();
-  if (/budget|\$|250/.test(text)) return "budget";
-  if (/acme|renew|nov|arr|commitment/.test(text)) return "acme";
-  if (/provider|sso|switch|why/.test(text) || text.trim() === "") return "sso";
-  return "none";
-}
-function fact(tag, klass, title, detail) {
-  return `<div class="card"><span class="tag ${klass}">${tag}</span><h2>${esc(title)}</h2><p class="meta">${detail}</p></div>`;
-}
-function renderAsk() {
-  const recent = Object.entries(items).filter(([, item]) => can(item.source));
-  const shown = recent.slice(0, 4);
-  const facts = decisions.filter(visibleDecision).length;
-  const openSources = sources.filter((s) => can(s.id)).length;
-  const active = decisions.find((d) => d.status === "active" && visibleDecision(d));
-  const feature = active ? `<button class="feature" type="button" data-decision="${active.id}"><span class="kicker">Active now</span><strong>${esc(active.statement)}</strong><span class="meta">${esc(people[active.by].name)}, ${esc(active.when)}. See where this came from.</span></button>` : "";
-  const chips = sources.filter((s) => can(s.id)).map((s) => `<span>${esc(s.name)}</span>`).join("");
-  const pet = `<div class="pet-pad"><div class="pet" id="pet" data-wisp="classic" aria-hidden="true"></div></div>`;
-  return `<div class="hero"><div><p class="kicker">Ask</p><h1>${esc(me().name)}, what changed?</h1><p class="lede">Ask about a decision, a promise, or a number. You get the fact, and where it was said.</p><div class="chips">${chips}</div></div>${pet}</div>
-    <form class="ask" id="ask-form"><input id="q" name="q" placeholder="Why did we change SSO providers?" value="${esc(state.query)}" autocomplete="off"><button type="button" class="mic" id="mic" aria-pressed="false">Speak</button><button type="submit">Look up</button></form>
-    <p class="voice-note" id="voice-note"></p>
-    ${feature}
-    <div class="metrics"><div class="metric"><b>${openSources}</b><span>Sources in view</span></div><div class="metric"><b>${recent.length}</b><span>Excerpts</span></div><div class="metric"><b>${facts}</b><span>Decisions</span></div></div>
-    <div class="prompts">${prompts.map(([k, q]) => `<button class="prompt" type="button" data-q="${esc(q)}"><span class="kicker">${k}</span><b>${esc(q)}</b></button>`).join("")}</div>
-    ${head("In this view", shown.length)}<div class="list">${shown.map(([id], i) => cite(id, i + 1)).join("") || `<p class="empty">No items in this view.</p>`}</div>`;
-}
-function renderAnswer() {
-  const kind = answerFor(state.query || "sso");
-  let left = "";
-  let right = "";
-  if (kind === "sso") {
-    const shown = decisions.filter((d) => d.about === "sso" && visibleDecision(d));
-    const active = shown.find((d) => d.status === "active");
-    const old = shown.find((d) => d.status === "superseded");
-    left = active
-      ? fact("Active decision", "good", active.statement, `${esc(people[active.by].name)} decided this on ${esc(active.when)}.${old ? ` It replaced “${esc(old.statement)}”` : ""}`)
-      : fact("Hidden", "", "You can't see this decision", `${esc(me().name)} is not in the channel where it was made.`);
-    const ev = [...new Set(shown.flatMap((d) => d.evidence))].filter(visibleItem);
-    right = ev.map((id, i) => cite(id, i + 1)).join("") || `<p class="empty">No citation in this view.</p>`;
-    return answerFrame(state.query || "Why did we change SSO providers?", left, right, ev.length);
-  } else if (kind === "acme") {
-    const ids = ["promise", "notion"].filter(visibleItem);
-    left = ids.length
-      ? fact("Commitment", "", "SSO live for Acme by Nov 15", "Still open. Priya owns it. The date was said in the deal channel.")
-      : fact("Hidden", "", "Nothing you can see", `${esc(me().name)} is not in the deal channel, so the promise stays hidden.`);
-    right = ids.map((id, i) => cite(id, i + 1)).join("") || `<p class="empty">No citation in this view.</p>`;
-    return answerFrame(state.query, left, right, ids.length);
-  } else if (kind === "budget") {
-    left = visibleItem("budget")
-      ? fact("Figure", "warn", "Q4 platform budget is $250k", "Locked on 1 Oct 2026 in the leadership channel.")
-      : fact("Hidden", "", "Nothing you can see", `${esc(me().name)} is not in the leadership channel, so the amount stays hidden.`);
-    right = visibleItem("budget") ? cite("budget", 1) : `<p class="empty">No citation in this view.</p>`;
-    return answerFrame(state.query, left, right, visibleItem("budget") ? 1 : 0);
+  <h2>1. Company</h2>
+  <form id="company">
+    <label for="company-name">Company name</label>
+    <input id="company-name" name="name" maxlength="80" required>
+    <button type="submit">Save</button>
+  </form>
+
+  <h2>2. Connect</h2>
+  <div id="cards">
+    <div class="card" data-provider="slack" data-connectable="false"></div>
+    <div class="card" data-provider="notion" data-connectable="false"></div>
+    <div class="card" data-provider="google" data-connectable="false"></div>
+    <div class="card" data-provider="github" data-connectable="false"></div>
+    <div class="card" data-provider="hubspot" data-connectable="false"></div>
+  </div>
+
+  <h2>3. Open Weave</h2>
+  <form id="model">
+    <label for="model-key">Model key, optional</label>
+    <input id="model-key" name="key" type="password" autocomplete="off" placeholder="Leave empty to use the server default">
+    <button type="submit">Save key</button>
+    <p id="model-state" class="status"></p>
+  </form>
+  <button id="open" type="button">Open Weave</button>
+  <p id="open-error" class="error"></p>
+  <div id="result" class="result" hidden>
+    <p>Copy this token into the pet config or Cursor. It is shown once.</p>
+    <pre id="token"></pre>
+    <p>Cursor MCP</p>
+    <pre id="mcp"></pre>
+    <button id="download" type="button">Download pet config</button>
+  </div>
+</main>
+<script>
+const cards = document.getElementById("cards");
+const params = new URLSearchParams(location.search);
+
+function cardView(card) {
+  const wrap = document.createElement("div");
+  wrap.className = "card";
+  wrap.dataset.provider = card.id;
+  wrap.dataset.connectable = card.connectable ? "true" : "false";
+  const text = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = card.name;
+  const state = document.createElement("div");
+  state.className = "status " + card.status;
+  state.textContent = card.reason || card.status;
+  text.append(title, state);
+  wrap.append(text);
+  if (card.connectable) {
+    const link = document.createElement("a");
+    link.className = "button";
+    link.href = "/connect/" + card.id;
+    link.textContent = "Connect";
+    wrap.append(link);
+  } else {
+    const link = document.createElement("span");
+    link.className = "button";
+    link.setAttribute("aria-disabled", "true");
+    link.textContent = card.status === "disconnected" ? "Connect" : card.status;
+    wrap.append(link);
   }
-  return answerFrame(state.query, fact("No match", "", "Nothing matched", "Try the SSO change, the Acme promise, or the Q4 budget."), "", 0);
+  cards.append(wrap);
+  if (card.needs && card.needs.includes("folder")) folderForm(wrap);
+  if (card.needs && card.needs.includes("repo")) repoForm(wrap);
 }
-function answerFrame(query, left, right, n) {
-  return `<p class="kicker">Answer</p><h1>${esc(query || "Why did we change SSO providers?")}</h1><p class="lede">The fact is on the left. What ${esc(me().name)} can open is on the right.</p><div class="split"><div>${head("Fact", "01")}${left}</div><div>${head("Where it was said", String(n).padStart(2, "0"))}<div class="stack">${right}</div></div></div>`;
-}
-function sourceCard(s, open) {
-  return `<button class="source" type="button" data-source="${s.id}" data-sys="${s.sys}" ${open ? "" : "disabled"}><span><span class="kicker">${open ? "In view" : "Hidden"}</span><strong>${esc(s.name)}</strong><span class="meta">${open ? esc(s.detail) : "Outside this view"}</span></span><span class="mark" data-sys="${s.sys}">${esc(s.system[0])}</span></button>`;
-}
-function renderSources() {
-  const systems = ["Slack", "GitHub", "Notion"];
-  const groups = systems.map((system) => {
-    const rows = sources.filter((s) => s.system === system);
-    const open = rows.filter((s) => can(s.id)).length;
-    return `<section class="group"><h3>${system}</h3><div class="list">${rows.map((s) => sourceCard(s, can(s.id))).join("")}</div><p class="meta">${open} of ${rows.length} in this view</p></section>`;
-  }).join("");
-  return `<p class="kicker">Sources</p><h1>Where the work lives</h1><p class="lede">Places ${esc(me().name)} can and cannot open. Drive is not connected.</p>${groups}<section class="group"><h3>Google Drive</h3><div class="source" data-sys="gdrive"><span><span class="kicker">Not connected</span><strong>No folder yet</strong><span class="meta">Connect a folder to see files here.</span></span><span class="mark" data-sys="gdrive">D</span></div></section>`;
-}
-function renderItem() {
-  const item = items[state.item];
-  if (!can(item.source)) return `<p class="kicker">Item</p><h1>Hidden</h1><p class="lede">${esc(me().name)} cannot open this.</p>`;
-  const src = sources.find((s) => s.id === item.source);
-  const related = decisions.filter((d) => d.evidence.includes(state.item) && visibleDecision(d));
-  return `<div class="crumb">Sources <span>→</span> ${esc(src.system)} <span>→</span> <b>${esc(src.name)}</b></div><h1>${esc(item.title)}</h1><p class="lede">${esc(people[item.author].name)} · ${esc(item.when)}</p><div class="card"><p class="kicker">What was said</p><p class="quote">“${esc(item.quote)}”</p><p class="meta"><a href="${esc(item.url)}">Open the original</a></p></div>${related.length ? `${head("Decisions this supports", related.length)}<div class="list">${related.map((d) => `<button class="row" type="button" data-decision="${d.id}"><span class="tag ${d.status === "active" ? "good" : "warn"}">${esc(d.status)}</span><strong style="display:block;margin-top:8px">${esc(d.statement)}</strong></button>`).join("")}</div>` : ""}`;
-}
-function decisionRow(d) {
-  const n = d.evidence.filter(visibleItem).length;
-  return `<button class="row" type="button" data-decision="${d.id}"><span class="tag ${d.status === "active" ? "good" : "warn"}">${esc(d.status)}</span><strong style="display:block;margin-top:10px;font-size:20px">${esc(d.statement)}</strong><span class="meta">${esc(people[d.by].name)} · ${esc(d.when)} · ${n} citation${n === 1 ? "" : "s"}</span></button>`;
-}
-function renderDecisions() {
-  const shown = decisions.filter(visibleDecision);
-  const active = shown.filter((d) => d.status === "active");
-  const older = shown.filter((d) => d.status !== "active");
-  const block = (title, rows) => rows.length ? `${head(title, rows.length)}<div class="list">${rows.map(decisionRow).join("")}</div>` : "";
-  const body = block("Active", active) + block("Superseded", older);
-  return `<p class="kicker">Decisions</p><h1>What ${esc(me().name)} can stand behind</h1><p class="lede">Current decisions come first. Replaced ones are listed after.</p>${body || `<p class="empty">Nothing ${esc(me().name)} can see.</p>`}`;
-}
-function personCard(id) {
-  const p = people[id];
-  return `<button class="person" type="button" data-person="${id}" data-on="${id === state.person ? 1 : 0}"><span class="avatar">${esc(p.name[0])}</span><span><strong>${esc(p.name)}</strong><span class="meta">Level ${p.level} · reports to ${esc(p.reports)}</span>${pips(p.level)}</span></button>`;
-}
-function renderPeople() {
-  const depts = ["Engineering", "Sales"];
-  const groups = depts.map((dept) => {
-    const ids = Object.entries(people).filter(([, p]) => p.dept === dept).sort((a, b) => b[1].level - a[1].level).map(([id]) => id);
-    return `<section class="group"><h3>${dept}</h3><div class="list">${ids.map(personCard).join("")}</div></section>`;
-  }).join("");
-  return `<p class="kicker">People</p><h1>Who works here</h1><p class="lede">Leads are listed first. Pick a person to see what they can see.</p><div class="grid">${groups}</div>`;
-}
-function renderPath() {
-  const d = decisions.find((x) => x.id === state.decision);
-  if (!d || !visibleDecision(d)) return `<p class="kicker">Evidence</p><h1>Nothing to follow</h1><p class="lede">Pick a decision ${esc(me().name)} can see.</p>`;
-  const steps = [`<li class="node"><div class="kicker">Decision</div><strong>${esc(d.statement)}</strong><div class="meta">${esc(people[d.by].name)} · ${esc(d.when)}</div></li>`];
-  d.evidence.filter(visibleItem).forEach((id) => {
-    const item = items[id];
-    const src = srcOf(id);
-    steps.push(`<li class="node"><div class="kicker">Excerpt</div><strong>${esc(item.title)}</strong><div class="meta">${esc(people[item.author].name)}</div></li>`);
-    steps.push(`<li class="node"><div class="kicker">${esc(src.system)}</div><strong>${esc(src.name)}</strong></li>`);
+
+function folderForm() {
+  const form = document.createElement("form");
+  form.id = "folder";
+  form.innerHTML = '<label for="folder-id">Drive folder id</label><input id="folder-id" required><button type="submit">Save folder</button>';
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await post("/setup/google/folder", { folder_id: form.querySelector("input").value });
+    load();
   });
-  return `<p class="kicker">Evidence</p><h1>${esc(d.statement)}</h1><p class="lede">From the decision down to the place it was said.</p><ol class="tree">${steps.join("")}</ol>`;
+  cards.append(form);
 }
-const screens = { ask: renderAsk, answer: renderAnswer, sources: renderSources, item: renderItem, decisions: renderDecisions, people: renderPeople, path: renderPath };
-function draw() {
-  const p = me();
-  document.getElementById("avatar").textContent = p.name[0];
-  document.getElementById("who-name").textContent = p.name;
-  document.getElementById("who-role").textContent = `${p.dept} · level ${p.level}`;
-  document.querySelectorAll("#nav button").forEach((b) => {
-    const on = b.dataset.screen === state.screen || (state.screen === "answer" && b.dataset.screen === "ask") || (state.screen === "item" && b.dataset.screen === "sources");
-    if (on) b.setAttribute("aria-current", "page");
-    else b.removeAttribute("aria-current");
+
+function repoForm() {
+  const form = document.createElement("form");
+  form.id = "repo";
+  form.innerHTML = '<label for="repo-owner">GitHub owner</label><input id="repo-owner" required><label for="repo-name">Repository</label><input id="repo-name" required><button type="submit">Save repository</button>';
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await post("/setup/github/repo", {
+      owner: document.getElementById("repo-owner").value,
+      repo: document.getElementById("repo-name").value,
+    });
+    load();
   });
-  document.getElementById("main").innerHTML = screens[state.screen]();
-  mountWisp();
+  cards.append(form);
 }
-function mountWisp() {
-  const slot = document.getElementById("pet");
-  if (!slot) return;
-  fetch("wisp.svg").then((r) => r.text()).then((text) => {
-    if (!document.getElementById("pet")) return;
-    slot.innerHTML = text;
-    const svg = slot.querySelector("svg");
-    if (svg) svg.style.background = "transparent";
+
+async function post(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || "request failed");
+  return payload;
 }
-function setWispState(name) {
-  document.querySelector("#pet .wisp")?.setAttribute("data-state", name);
-}
-document.getElementById("nav").onclick = (e) => {
-  const screen = e.target.closest("button")?.dataset.screen;
-  if (!screen) return;
-  state.screen = screen;
-  draw();
-};
-document.getElementById("person").innerHTML = Object.entries(people).map(([id, p]) => `<option value="${id}">${esc(p.name)} · ${esc(p.dept)}</option>`).join("");
-document.getElementById("person").onchange = (e) => { state.person = e.target.value; draw(); };
-document.getElementById("theme").onclick = () => {
-  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-  document.documentElement.dataset.theme = next;
-  document.getElementById("theme").textContent = next === "dark" ? "Light" : "Dark";
-};
-let listener = null;
-function startVoice() {
-  const petEl = document.getElementById("pet");
-  const mic = document.getElementById("mic");
-  const note = document.getElementById("voice-note");
-  const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!Rec) {
-    if (note) note.textContent = "Voice works in Chrome or Edge.";
-    return;
+
+async function load() {
+  const status = await fetch("/setup/status").then((response) => response.json());
+  document.getElementById("company-name").value = status.company || "";
+  document.getElementById("model-state").textContent = status.model === "saved" ? "A model key is saved." : "Using the server default.";
+  cards.replaceChildren();
+  (status.connectors || []).forEach(cardView);
+  if (params.get("error")) {
+    const note = document.createElement("p");
+    note.className = "error";
+    note.textContent = "That connect did not finish. Try the button again.";
+    cards.prepend(note);
   }
-  if (listener) { listener.stop(); return; }
-  listener = new Rec();
-  listener.lang = "en-US";
-  listener.onstart = () => {
-    mic.setAttribute("aria-pressed", "true");
-    mic.textContent = "Listening";
-    petEl?.classList.add("listening");
-    setWispState("reading");
-    if (note) note.textContent = "Listening. Say the question.";
-  };
-  listener.onresult = (event) => {
-    const said = event.results[0][0].transcript;
-    const input = document.getElementById("q");
-    if (input) input.value = said;
-    state.query = said;
-    state.screen = "answer";
-    listener = null;
-    draw();
-  };
-  listener.onerror = () => {
-    if (note) note.textContent = "Voice didn't catch that. Type the question instead.";
-  };
-  listener.onend = () => {
-    listener = null;
-    if (document.getElementById("mic")) {
-      mic.setAttribute("aria-pressed", "false");
-      mic.textContent = "Speak";
-      petEl?.classList.remove("listening");
-      setWispState("resting");
-    }
-  };
-  listener.start();
 }
-document.getElementById("main").onclick = (e) => {
-  if (e.target.closest("#mic")) { startVoice(); return; }
-  const q = e.target.closest("[data-q]");
-  const item = e.target.closest("[data-item]");
-  const decision = e.target.closest("[data-decision]");
-  const person = e.target.closest("[data-person]");
-  const source = e.target.closest("[data-source]");
-  if (q) { state.query = q.dataset.q; state.screen = "answer"; draw(); }
-  if (item) { state.item = item.dataset.item; state.screen = "item"; draw(); }
-  if (decision) { state.decision = decision.dataset.decision; state.screen = "path"; draw(); }
-  if (person) { state.person = person.dataset.person; document.getElementById("person").value = state.person; draw(); }
-  if (source && !source.disabled) {
-    const id = Object.keys(items).find((key) => items[key].source === source.dataset.source);
-    if (id) { state.item = id; state.screen = "item"; draw(); }
+
+document.getElementById("company").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await post("/setup/company", { name: document.getElementById("company-name").value });
+  load();
+});
+
+document.getElementById("model").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const saved = await post("/setup/model", { key: document.getElementById("model-key").value });
+  document.getElementById("model-key").value = "";
+  document.getElementById("model-state").textContent = saved.model === "saved" ? "A model key is saved." : "Using the server default.";
+});
+
+let pet = null;
+document.getElementById("open").addEventListener("click", async () => {
+  const error = document.getElementById("open-error");
+  error.textContent = "";
+  try {
+    const opened = await post("/setup/open", {});
+    pet = opened.pet;
+    document.getElementById("token").textContent = opened.token;
+    document.getElementById("mcp").textContent = JSON.stringify(opened.mcp, null, 2);
+    document.getElementById("result").hidden = false;
+  } catch (exc) {
+    error.textContent = exc.message;
   }
-};
-document.getElementById("main").oninput = (e) => {
-  const petEl = document.getElementById("pet");
-  if (petEl && e.target.id === "q") petEl.classList.toggle("typing", e.target.value.length > 0);
-};
-document.getElementById("main").onsubmit = (e) => {
-  if (e.target.id !== "ask-form") return;
-  e.preventDefault();
-  state.query = new FormData(e.target).get("q") || "Why did we change SSO providers?";
-  state.screen = "answer";
-  draw();
-};
-draw();
+});
+
+document.getElementById("download").addEventListener("click", () => {
+  if (!pet) return;
+  const blob = new Blob([JSON.stringify(pet, null, 2)], { type: "application/json" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "pet.config.json";
+  link.click();
+});
+
+load();
 </script>
 </body>
 </html>

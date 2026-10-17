@@ -44,20 +44,15 @@ class _PooledConn:
         self._closed = True
         conn = self._conn
         self._conn = None
-        discard = False
         try:
             if getattr(conn, "autocommit", False):
                 conn.autocommit = False
             conn.rollback()
         except Exception:
-            discard = True
-        try:
-            self._pool.putconn(conn, discard=discard)
-        except Exception:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            pass
+        # psycopg_pool putconn takes only the connection. A broken socket
+        # comes back with an unknown transaction status and the pool replaces it.
+        self._pool.putconn(conn)
 
     def __getattr__(self, name: str):
         return getattr(self._conn, name)

@@ -123,8 +123,10 @@ class NotionClient:
 
 
 def notion_client_from_env() -> NotionClient:
+    from app.connect.credentials import notion_token
+
     version = os.environ.get("NOTION_VERSION", "").strip() or PINNED_NOTION_VERSION
-    return NotionClient(os.environ.get("NOTION_TOKEN", ""), version=version)
+    return NotionClient(notion_token(), version=version)
 
 
 def _urlopen_transport(url: str, headers: dict[str, str], data: bytes | None = None) -> tuple[int, dict[str, str], bytes]:

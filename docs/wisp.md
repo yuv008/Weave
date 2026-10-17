@@ -233,7 +233,7 @@ If blocked, show Resting and do not call the server.
 
 ### G10 — Wrong server / open claim routes
 
-**Close:** Wisp uses only the agent port. Keep `POST /claims/*` off the public webhook until bearer auth is added (see [deployment.md](deployment.md)).
+**Close:** Wisp uses the agent paths on the public origin. `POST /claims/*` requires the viewer bearer token and returns 401 without it (see [deployment.md](deployment.md)).
 
 ### G11 — No shared mascot asset
 

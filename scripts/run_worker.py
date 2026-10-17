@@ -33,19 +33,30 @@ def _set(*names: str) -> bool:
 
 
 def slack_ready() -> bool:
-    return _set("SLACK_BOT_TOKEN", "WEAVE_TENANT_ID", "WEAVE_CONNECTION_ID", "WEAVE_WORKSPACE_ID")
+    from app.connect.credentials import slack_bot_token, slack_workspace_id
+
+    tenant = _env("WEAVE_TENANT_ID") or _env("WEAVE_TENANT")
+    return bool(tenant and slack_bot_token(tenant) and slack_workspace_id(tenant))
 
 
 def notion_ready() -> bool:
-    return _set("NOTION_TOKEN", "NOTION_WORKSPACE_ID")
+    from app.connect.credentials import notion_token, notion_workspace_id
+
+    tenant = _env("WEAVE_TENANT_ID") or _env("WEAVE_TENANT")
+    return bool(tenant and notion_token(tenant) and notion_workspace_id(tenant))
 
 
 def drive_ready() -> bool:
-    return _set("GOOGLE_DRIVE_FOLDER_ID")
+    from app.connect.credentials import google_folder_id
+
+    return bool(google_folder_id())
 
 
 def github_ready() -> bool:
-    return _set("GITHUB_TOKEN", "GITHUB_OWNER", "GITHUB_REPO")
+    from app.connect.credentials import github_access_token, github_coordinates
+
+    owner, repo = github_coordinates()
+    return bool(owner and repo and github_access_token())
 
 
 def _env(name: str, default: str = "") -> str:
@@ -56,14 +67,16 @@ def _slack_once() -> None:
     from app.graph.client import connect_graph
     from app.ingest.worker import backfill_public_channels, retry_failures, slack_client_from_env
 
+    from app.connect.credentials import slack_workspace_id
+
     client = slack_client_from_env()
     graph = connect_graph()
     domain = _env("SLACK_WORKSPACE_DOMAIN") or None
     # incremental keeps channels that already finished their backfill.
     backfill_public_channels(
-        _env("WEAVE_TENANT_ID"),
-        _env("WEAVE_CONNECTION_ID"),
-        _env("WEAVE_WORKSPACE_ID"),
+        _env("WEAVE_TENANT_ID") or _env("WEAVE_TENANT"),
+        _env("WEAVE_CONNECTION_ID", "slack-main"),
+        slack_workspace_id(),
         client,
         graph,
         workspace_domain=domain,
@@ -79,10 +92,12 @@ def _notion_once() -> None:
 
     client = notion_client_from_env()
     graph = connect_graph()
+    from app.connect.credentials import notion_workspace_id
+
     poll_shared_pages(
         _env("WEAVE_TENANT_ID", "demo"),
         _env("NOTION_CONNECTION_ID", "notion-main"),
-        _env("NOTION_WORKSPACE_ID"),
+        notion_workspace_id(),
         client,
         graph,
     )
@@ -96,10 +111,12 @@ def _drive_once() -> None:
 
     client = drive_client_from_env()
     graph = connect_graph()
+    from app.connect.credentials import google_folder_id
+
     poll_folder(
         _env("WEAVE_TENANT_ID", "demo"),
         _env("GOOGLE_DRIVE_CONNECTION_ID", "gdrive-main"),
-        _env("GOOGLE_DRIVE_FOLDER_ID"),
+        google_folder_id(),
         client,
         graph,
     )
@@ -113,11 +130,14 @@ def _github_once() -> None:
 
     client = github_client_from_env()
     graph = connect_graph()
+    from app.connect.credentials import github_coordinates
+
+    owner, repo = github_coordinates()
     poll_repository(
         _env("WEAVE_TENANT_ID", "demo"),
         _env("GITHUB_CONNECTION_ID", "github-main"),
-        _env("GITHUB_OWNER"),
-        _env("GITHUB_REPO"),
+        owner,
+        repo,
         client,
         graph,
     )

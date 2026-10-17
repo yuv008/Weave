@@ -135,6 +135,11 @@ class DriveClient:
 
 
 def drive_client_from_env() -> DriveClient:
+    from app.connect.credentials import google_access_token
+
+    token = google_access_token()
+    if token:
+        return DriveClient(token=token)
     path = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip() or "secrets/gdrive-service-account.json"
     return DriveClient(credentials_file=path)
 

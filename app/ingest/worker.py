@@ -37,10 +37,11 @@ logger = logging.getLogger("weave.ingest")
 
 
 def slack_client_from_env() -> SlackClient:
-    """Process edge for the bot token. The token is not logged."""
+    """Process edge for the bot token. A stored connect token wins over the environment."""
 
-    token = os.environ.get("SLACK_BOT_TOKEN", "")
-    return SlackClient(token)
+    from app.connect.credentials import slack_bot_token
+
+    return SlackClient(slack_bot_token())
 
 
 def backfill_public_channels(

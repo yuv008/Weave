@@ -26,6 +26,45 @@ def _records(app):
     return app.state.records
 
 
+def _bearer(request: Request) -> str:
+    header = request.headers.get("authorization", "")
+    if not header.lower().startswith("bearer "):
+        return ""
+    return header.split(" ", 1)[1].strip()
+
+
+def _viewer_known(token: str) -> bool:
+    """True when ``token`` matches a live ``api_token`` row. Failures stay a refusal."""
+
+    try:
+        from agents.gate.resolve import hash_token
+        from shared.pg import connect_pg
+
+        conn = connect_pg()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM api_token WHERE token_sha256 = %s AND revoked_at IS NULL",
+                    (hash_token(token),),
+                )
+                return cur.fetchone() is not None
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
+def _deny_unless_viewer(app, request: Request):
+    token = _bearer(request)
+    if not token:
+        return JSONResponse({"error": "not authorized"}, status_code=401)
+    checker = app.state.viewer_auth
+    allowed = checker(token) if checker is not None else _viewer_known(token)
+    if not allowed:
+        return JSONResponse({"error": "not authorized"}, status_code=401)
+    return None
+
+
 def _claims_for(app, payload: dict):
     """Claim store for a mention or DM. ``None`` when this process does not answer Slack."""
 
@@ -36,7 +75,9 @@ def _claims_for(app, payload: dict):
         return None
     if app.state.reply_claims is not _AUTO:
         return app.state.reply_claims
-    if not os.environ.get("SLACK_BOT_TOKEN"):
+    from app.connect.credentials import slack_bot_token
+
+    if not slack_bot_token(app.state.tenant_id):
         return None
     from agents.slack.claims import PostgresReplyClaims
     from shared.pg import connect_pg
@@ -49,7 +90,9 @@ def _run_slack_reply(app, payload: dict, claims) -> None:
     if runner is not None:
         runner(payload)
         return
-    token = os.environ.get("SLACK_BOT_TOKEN", "")
+    from app.connect.credentials import slack_bot_token
+
+    token = slack_bot_token(app.state.tenant_id)
     if not token or claims is None:
         return
     from agents.answer.agent import build_agent
@@ -82,6 +125,8 @@ def create_app(
     store=None,
     reply_claims=_AUTO,
     slack_runner=None,
+    viewer_auth=None,
+    secrets=None,
 ) -> FastAPI:
     app = FastAPI()
     app.state.graph = graph
@@ -107,6 +152,20 @@ def create_app(
     )
     app.state.reply_claims = reply_claims
     app.state.slack_runner = slack_runner
+    app.state.viewer_auth = viewer_auth
+    if secrets is not None:
+        app.state.secrets = secrets
+    elif graph is not None or store is not None:
+        from app.connect.secrets import MemorySecretStore
+
+        app.state.secrets = MemorySecretStore()
+    else:
+        app.state.secrets = None
+    from app.connect.credentials import use_store
+    from app.connect.routes import register_connect
+
+    use_store(app.state.secrets)
+    register_connect(app)
     if graph is None and store is None and os.environ.get("DATABASE_URL"):
         try:
             from shared.pg import warm_pg
@@ -195,6 +254,9 @@ def create_app(
 
     @app.post("/slack/decisions")
     async def slack_decisions(request: Request):
+        denied = _deny_unless_viewer(app, request)
+        if denied is not None:
+            return denied
         try:
             payload = await request.json()
         except json.JSONDecodeError:
@@ -219,6 +281,9 @@ def create_app(
         return {"decisions": [decision.as_dict() for decision in decisions]}
 
     async def _claim(request: Request, handler):
+        denied = _deny_unless_viewer(app, request)
+        if denied is not None:
+            return denied
         try:
             payload = await request.json()
         except json.JSONDecodeError:

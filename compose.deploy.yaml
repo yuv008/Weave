@@ -54,7 +54,7 @@ services:
       args:
         INSTALL_EMBED: "1"
     image: weave-worker
-    command: ["python", "-m", "app.poll", "--every", "300"]
+    command: ["python", "scripts/run_worker.py"]
     environment:
       WEAVE_CONFIG: config/weave.yaml
       GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/gdrive-service-account.json
@@ -63,14 +63,6 @@ services:
         source: ${GOOGLE_SERVICE_ACCOUNT_FILE:-./secrets/gdrive-service-account.json}
         target: /run/secrets/gdrive-service-account.json
         read_only: true
-
-  watcher:
-    <<: *env
-    image: weave-worker
-    command: ["sh", "-c", "test -n \"$$WEAVE_TENANT\" && exec python -m agents.watcher --tenant \"$$WEAVE_TENANT\" --every 60"]
-    depends_on:
-      poll:
-        condition: service_started
 
   proxy:
     image: caddy:2

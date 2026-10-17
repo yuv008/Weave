@@ -25,6 +25,9 @@ def poll_once(graph, store, env: dict[str, str] | None = None) -> dict[str, str]
         "notion": _guard(_notion, graph, store, settings),
         "gdrive": _guard(_drive, graph, store, settings),
         "github": _guard(_github, graph, store, settings),
+        "gmail": _guard(_gmail, graph, store, settings),
+        "gcal": _guard(_gcal, graph, store, settings),
+        "hubspot": _guard(_hubspot, graph, store, settings),
     }
 
 
@@ -125,6 +128,66 @@ def _drive(graph, store, env) -> str:
         env.get("GOOGLE_DRIVE_CONNECTION_ID", "").strip() or "gdrive-main",
         folder,
         drive_client_from_env(),
+        graph,
+        store,
+    )
+    return "ok"
+
+
+def _gmail(graph, store, env) -> str:
+    tenant = _tenant(env)
+    mailbox = env.get("GMAIL_MAILBOX", "").strip()
+    credentials = env.get("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip() or "secrets/gdrive-service-account.json"
+    if not tenant or not mailbox or not Path(credentials).is_file():
+        return "skip"
+    from app.gmail.client import gmail_client_from_env
+    from app.gmail.worker import poll_mailbox
+
+    poll_mailbox(
+        tenant,
+        env.get("GMAIL_CONNECTION_ID", "").strip() or "gmail-main",
+        mailbox,
+        gmail_client_from_env(),
+        graph,
+        store,
+    )
+    return "ok"
+
+
+def _gcal(graph, store, env) -> str:
+    tenant = _tenant(env)
+    calendar_id = env.get("GCAL_CALENDAR_ID", "").strip() or "primary"
+    credentials = env.get("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip() or "secrets/gdrive-service-account.json"
+    if not tenant or not Path(credentials).is_file():
+        return "skip"
+    from app.gcal.client import calendar_client_from_env
+    from app.gcal.worker import poll_calendar
+
+    poll_calendar(
+        tenant,
+        env.get("GCAL_CONNECTION_ID", "").strip() or "gcal-main",
+        calendar_id,
+        calendar_client_from_env(),
+        graph,
+        store,
+    )
+    return "ok"
+
+
+def _hubspot(graph, store, env) -> str:
+    tenant = _tenant(env)
+    portal = env.get("HUBSPOT_PORTAL_ID", "").strip()
+    token = env.get("HUBSPOT_TOKEN", "").strip() or env.get("HUBSPOT_ACCESS_TOKEN", "").strip()
+    if not tenant or not portal or not token:
+        return "skip"
+    from app.hubspot.client import hubspot_client_from_env
+    from app.hubspot.worker import poll_portal
+
+    poll_portal(
+        tenant,
+        env.get("HUBSPOT_CONNECTION_ID", "").strip() or "hubspot-main",
+        portal,
+        hubspot_client_from_env(),
         graph,
         store,
     )

@@ -37,9 +37,24 @@ def github_source_id(tenant_id: str, repo_slug: str) -> str:
     return source_id(tenant_id, "github", "repo", repo_slug)
 
 
+def gmail_source_id(tenant_id: str, mailbox: str) -> str:
+    return source_id(tenant_id, "gmail", "mailbox", mailbox)
+
+
+def gcal_source_id(tenant_id: str, calendar_id: str) -> str:
+    return source_id(tenant_id, "gcal", "calendar", calendar_id)
+
+
+def hubspot_source_id(tenant_id: str, portal_id: str) -> str:
+    return source_id(tenant_id, "hubspot", "portal", portal_id)
+
+
 SOURCE_LABELS = {
     "slack": (Label.CONVERSATION, Label.SOURCE),
     "notion": (Label.TEAMSPACE, Label.SOURCE),
     "gdrive": (Label.SOURCE,),
     "github": (Label.REPOSITORY, Label.SOURCE),
+    "gmail": (Label.SOURCE,),
+    "gcal": (Label.SOURCE,),
+    "hubspot": (Label.SOURCE,),
 }

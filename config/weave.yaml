@@ -51,6 +51,9 @@ authority:
   notion: 3
   gdrive: 3
   github: 2
+  hubspot: 2
+  gmail: 2
+  gcal: 2
   slack: 1
 
 # Per-source policy, keyed by the source's ACL group string.
@@ -141,3 +144,34 @@ sources:
     min_level: 0
     cascade_policy: manual
     authority: 3
+  "gmail:sales@example.com":
+    name: "Sales mailbox"
+    min_level: 1
+    cascade_policy: manual
+    authority: 2
+  "gmail:yuvrajsanghai9@gmail.com":
+    name: "Gmail mailbox"
+    min_level: 1
+    cascade_policy: manual
+    authority: 2
+  "gcal:primary":
+    name: "Company calendar"
+    min_level: 0
+    cascade_policy: manual
+    authority: 2
+    org_wide: true
+  "gcal:yuvrajsanghai9@gmail.com":
+    name: "Google Calendar"
+    min_level: 1
+    cascade_policy: manual
+    authority: 2
+  "hubspot:247718406":
+    name: "HubSpot CRM"
+    min_level: 1
+    cascade_policy: manual
+    authority: 2
+  "hubspot:demo-portal":
+    name: "HubSpot CRM"
+    min_level: 0
+    cascade_policy: manual
+    authority: 2

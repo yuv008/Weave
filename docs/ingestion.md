@@ -36,6 +36,9 @@ flowchart LR
   notion[Notion]
   drive[Google Drive]
   github[GitHub]
+  gmail[Gmail]
+  gcal[Google Calendar]
+  hubspot[HubSpot]
   yaml[(config/weave.yaml)]
   ingest[[Ingestion]]
   falkor[(FalkorDB co:tenant)]
@@ -46,6 +49,9 @@ flowchart LR
   notion -->|shared pages| ingest
   drive -->|Google Docs in one folder| ingest
   github -->|issues, pull requests, comments| ingest
+  gmail -->|mailbox metadata and snippets| ingest
+  gcal -->|calendar events| ingest
+  hubspot -->|companies and deals| ingest
   yaml -->|allow-list and authority| ingest
   ingest -->|items, sources, edges| falkor
   ingest -->|checkpoints, source_sync| pg
@@ -91,8 +97,8 @@ flowchart TB
 
 | Step | What it does | Where it stops |
 | --- | --- | --- |
-| 1 Fetch | Slack lists public channels and history. Notion searches shared pages. Drive lists Docs in one folder. GitHub lists issues and pull requests, then comments. | Provider error. The page is not marked complete. |
-| 2 Allow-list | Looks up `slack:{channel}`, `notion:{workspace}`, `gdrive:{folder}`, or `github:{owner/repo}` in `config/weave.yaml`. | Missing key. The function returns before `ingest_record` is updated. |
+| 1 Fetch | Slack lists public channels and history. Notion searches shared pages. Drive lists Docs in one folder. GitHub lists issues and pull requests, then comments. Gmail lists mailbox messages or `users.history`. Google Calendar lists events with a `syncToken`. HubSpot searches companies and deals by `hs_lastmodifieddate`. | Provider error. The page is not marked complete. |
+| 2 Allow-list | Looks up `slack:{channel}`, `notion:{workspace}`, `gdrive:{folder}`, `github:{owner/repo}`, `gmail:{mailbox}`, `gcal:{calendar}`, or `hubspot:{portal}` in `config/weave.yaml`. | Missing key. The function returns before `ingest_record` is updated. |
 | 3 Normalize | Builds one canonical message or document. Keeps a SHA-256 hash, a 280-character excerpt, and the source URL. Drops the rest of the body. | Malformed record. A failure row is stored and the page does not advance. |
 | 4 Versioned MERGE | FalkorDB `MERGE` on the stable id. A newer version replaces the excerpt and hash. The same version refreshes edges only. An older version writes nothing. A delete blanks the excerpt and keeps the edges. | The node id is the duplicate key. |
 | 5 Checkpoint | After every record on the page is accepted, write `ingest_record` kind `sync_state`. | A blocked record returns first, so the cursor stays put. |

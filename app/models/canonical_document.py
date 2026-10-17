@@ -51,8 +51,8 @@ class CanonicalDocument(BaseModel):
     @field_validator("source")
     @classmethod
     def _source(cls, value: str) -> str:
-        if value not in {"notion", "gdrive", "github"}:
-            raise ValueError("document source must be notion, gdrive, or github")
+        if value not in {"notion", "gdrive", "github", "gcal", "hubspot"}:
+            raise ValueError("document source must be notion, gdrive, github, gcal, or hubspot")
         return value
 
     @field_validator("visibility")
@@ -72,7 +72,7 @@ class CanonicalDocument(BaseModel):
     @field_validator("kind")
     @classmethod
     def _kind(cls, value: str) -> str:
-        if value not in {"", "issue", "pull_request", "comment"}:
+        if value not in {"", "issue", "pull_request", "comment", "event", "company", "deal"}:
             raise ValueError("kind is invalid")
         return value
 

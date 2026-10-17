@@ -43,6 +43,10 @@ def github_issue_id(tenant: str, repo: str, number: int) -> str:
     return item_id(tenant, "github", "issue", repo, str(number))
 
 
+def gmail_message_id(tenant: str, mailbox: str, message_id: str) -> str:
+    return item_id(tenant, "gmail", "message", mailbox, message_id)
+
+
 def source_id(tenant: str, source: str, kind: str, *parts: str) -> str:
     return ":".join((tenant, source, kind, *parts))
 

@@ -6,7 +6,7 @@ from app.models.canonical import conversation_node_id, message_node_id
 from app.models.canonical_document import document_node_id
 from shared.acl import ORG_WIDE, acl_group, is_acl, parse_acl
 from shared.config import load_config
-from shared.ids import claim_id, document_id, entity_id, person_id, slack_channel_id, slack_message_id
+from shared.ids import claim_id, document_id, entity_id, gmail_message_id, person_id, slack_channel_id, slack_message_id
 from shared.indexes import index_statements
 from shared.schema import Label, company_graph, private_graph
 from shared.timefmt import is_ts, to_ts
@@ -16,6 +16,7 @@ def test_ids_match_existing_connector_formats():
     assert slack_message_id("acme", "C1", "1700000000.000100") == message_node_id("acme", "C1:1700000000.000100")
     assert slack_channel_id("acme", "T1", "C1") == conversation_node_id("acme", "T1", "C1")
     assert document_id("acme", "notion", "W1", "page") == document_node_id("acme", "notion", "W1", "page")
+    assert gmail_message_id("acme", "sales@example.com", "abc") == "acme:gmail:message:sales@example.com:abc"
 
 
 def test_claim_ids_are_deterministic_and_normalized():
@@ -38,7 +39,7 @@ def test_acl_round_trip_and_rejects():
     assert parse_acl(acl_group("slack", "C123")) == ("slack", "C123")
     assert parse_acl(acl_group("github", "org/repo")) == ("github", "org/repo")
     assert parse_acl(ORG_WIDE) == ("org", "all")
-    for bad in ("slack", "slack:", "jira:ABC", "slack: C1", "Slack:C1", "org:everyone", ""):
+    for bad in ("slack", "slack:", "jira:ABC", "slack: C1", "Slack:C1", "org:everyone", "gmail:", ""):
         assert not is_acl(bad), bad
 
 
@@ -64,7 +65,15 @@ def test_config_loads_contract_values():
     assert cfg.embedding.dim == 384
     assert cfg.sources["slack:C0LEADERS"].min_level == 2
     assert cfg.sources["slack:C0LEADERS"].cascade_policy == "broadcast"
-    assert cfg.authority == {"notion": 3, "gdrive": 3, "github": 2, "slack": 1}
+    assert cfg.authority == {
+        "notion": 3,
+        "gdrive": 3,
+        "github": 2,
+        "hubspot": 2,
+        "gmail": 2,
+        "gcal": 2,
+        "slack": 1,
+    }
 
 
 def test_index_statements_cover_every_contract_label():

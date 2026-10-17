@@ -11,7 +11,15 @@ from fixtures.acme import build
 
 def test_poll_skips_connectors_that_are_not_configured():
     results = poll_once(object(), object(), {})
-    assert results == {"slack": "skip", "notion": "skip", "gdrive": "skip", "github": "skip"}
+    assert results == {
+        "slack": "skip",
+        "notion": "skip",
+        "gdrive": "skip",
+        "github": "skip",
+        "gmail": "skip",
+        "gcal": "skip",
+        "hubspot": "skip",
+    }
 
 
 def test_webhook_health_does_not_need_a_token():

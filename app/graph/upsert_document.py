@@ -15,11 +15,14 @@ from app.graph.policy import (
     SOURCE_LABELS,
     allowed_source,
     drive_source_id,
+    gcal_source_id,
     github_source_id,
+    hubspot_source_id,
     notion_source_id,
 )
 from app.graph.upsert import UpsertResult
 from app.models.canonical_document import CanonicalDocument
+from shared.ids import person_id
 from shared.schema import Label, Prop, Rel
 from shared.timefmt import to_ts
 
@@ -143,6 +146,21 @@ def upsert_document(graph, document: CanonicalDocument, *, now: datetime | None 
                 "empty_hash": _EMPTY_HASH,
             },
         )
+    if document.source == "gcal" and document.author_external_id and "@" in document.author_external_id:
+        graph.query(
+            f"""
+MERGE (p:{Label.PERSON} {{id: $person_id}})
+SET p.{Prop.TENANT_ID} = $tenant_id, p.{Prop.EMAIL} = $email, p.{Prop.NAME} = $email
+MERGE (d:{item_label} {{id: $doc_id}})
+MERGE (d)-[:{Rel.AUTHORED_BY}]->(p)
+""",
+            {
+                "person_id": person_id(document.tenant_id, document.author_external_id),
+                "tenant_id": document.tenant_id,
+                "email": document.author_external_id,
+                "doc_id": document.node_id,
+            },
+        )
     return UpsertResult(node_id=document.node_id, applied=True)
 
 
@@ -159,6 +177,18 @@ def _allowed(document: CanonicalDocument):
             return None
         group, policy = found
         return "notion", group, policy, notion_source_id(document.tenant_id, document.workspace_id)
+    if document.source == "gcal":
+        found = allowed_source("gcal", document.workspace_id)
+        if found is None:
+            return None
+        group, policy = found
+        return "gcal", group, policy, gcal_source_id(document.tenant_id, document.workspace_id)
+    if document.source == "hubspot":
+        found = allowed_source("hubspot", document.workspace_id)
+        if found is None:
+            return None
+        group, policy = found
+        return "hubspot", group, policy, hubspot_source_id(document.tenant_id, document.workspace_id)
     found = allowed_source("gdrive", document.workspace_id)
     if found is None:
         return None
@@ -174,7 +204,12 @@ def _item_label(document: CanonicalDocument) -> str:
 
 def _params(document, ingested_at, system, group, policy, source_node) -> dict:
     excerpt = "" if document.deleted else document.excerpt
-    object_type = document.kind if document.kind in {"issue", "pull_request"} else "document"
+    if document.kind == "event":
+        object_type = "event"
+    elif document.kind in {"issue", "pull_request"}:
+        object_type = document.kind
+    else:
+        object_type = "document"
     external = document.repo_slug if system == "github" else document.workspace_id
     return {
         "doc_id": document.node_id,

@@ -11,7 +11,7 @@ Items and sources store these in ``acl_groups``; the caller's groups come
 from the ``group_membership`` table and use the same strings.
 """
 
-SYSTEMS = ("slack", "github", "notion", "gdrive")
+SYSTEMS = ("slack", "github", "notion", "gdrive", "gmail", "gcal", "hubspot")
 ORG_WIDE = "org:all"
 
 

@@ -136,7 +136,7 @@ def _keyword_hits(fx, params):
         if score:
             scored.append((score, chunk["item_id"]))
     scored.sort(key=lambda row: (-row[0], row[1]))
-    return [(item_id,) for _, item_id in scored[: int(params["limit"])]]
+    return [(item_id,) for _, item_id in scored[: int(params.get("limit") or 8)]]
 
 
 def _add_episode(env, episode_id, *, note, question, person="sam", audience="person", created_at=None):

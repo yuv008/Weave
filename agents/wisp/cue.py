@@ -6,6 +6,8 @@ match. The prompt is search input only: this module does not call the answer
 loop or a model, and it does not write episodes, conversation turns, or logs.
 """
 
+import threading
+
 from agents.gate.visible import chunk_visible_sql, gate_params
 from agents.memory.recall import recall
 from agents.tools.base import ToolContext
@@ -15,15 +17,17 @@ from shared.acl import SYSTEMS
 QUOTE_CHARS = 180
 PERSONAL_SOURCE = "Personal note"
 _RECALL_LIMIT = 5
+_DB_LOCK = threading.Lock()
+_DB: dict[int, object] = {}
 
 
 def cue(ctx: ToolContext, prompt: str) -> dict[str, str]:
     """The single best hit for ``prompt``, or ``unsure`` with empty strings."""
 
     company = _company_hit(ctx, prompt)
-    personal = _personal_hit(ctx, prompt)
     if company is not None:
         return company
+    personal = _personal_hit(ctx, prompt)
     if personal is not None:
         return personal
     return _unsure()
@@ -100,6 +104,34 @@ def _source_from_id(item_id: str) -> str:
     return ""
 
 
+def _reuse(connect):
+    """One autocommit connection per connect function. Test doubles are not kept."""
+
+    key = id(connect)
+    with _DB_LOCK:
+        cached = _DB.get(key)
+        if cached is not None and not getattr(cached, "closed", True):
+            return cached, True
+    conn = connect()
+    if not hasattr(conn, "autocommit"):
+        return conn, False
+    conn.autocommit = True
+    with _DB_LOCK:
+        _DB[key] = conn
+    return conn, True
+
+
+def _drop(connect) -> None:
+    key = id(connect)
+    with _DB_LOCK:
+        conn = _DB.pop(key, None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def _chunk_row(ctx: ToolContext, prompt: str):
     """One visible chunk, or None. A one-column row means the caller should use the graph."""
 
@@ -107,18 +139,21 @@ def _chunk_row(ctx: ToolContext, prompt: str):
         return None
     tenant = ctx.principal.tenant
     params = {**gate_params(ctx.principal), "tenant": tenant, "query": prompt, "prefix": f"{tenant}:%"}
-    conn = ctx.pg_connect()
+    conn, keep = _reuse(ctx.pg_connect)
     try:
         with conn.cursor() as cur:
             cur.execute(_CHUNK_TEXT, params)
             rows = cur.fetchall()
     except Exception:
+        if keep:
+            _drop(ctx.pg_connect)
         return None
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        if not keep:
+            try:
+                conn.close()
+            except Exception:
+                pass
     return rows[0] if rows else None
 
 

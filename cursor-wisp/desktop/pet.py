@@ -1525,6 +1525,38 @@ def run_form():
     WinForms.Application.Run()
 
 
+def _cue_from_answer(card):
+    """Turn an answer card into the pet dialogue. No evidence means no card."""
+
+    def clean(value, limit):
+        text = " ".join(str(value or "").replace("\ufeff", "").split())
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip()
+
+    answer = clean(card.get("answer"), 500)
+    evidence = card.get("evidence") if isinstance(card.get("evidence"), dict) else {}
+    item_id = ""
+    for claim in card.get("claims") or []:
+        if not isinstance(claim, dict):
+            continue
+        ids = claim.get("evidence") or []
+        if ids:
+            item_id = str(ids[0])
+            break
+    if not item_id and evidence:
+        item_id = str(next(iter(evidence)))
+    entry = evidence.get(item_id) if item_id else None
+    quote = ""
+    source = ""
+    if isinstance(entry, dict):
+        quote = clean(entry.get("quote") or entry.get("summary"), 180)
+        source = clean(entry.get("source"), 80)
+    if not answer or not item_id:
+        return {"state": "unsure", "summary": "", "quote": "", "source": "", "item_id": ""}
+    return {"state": "found", "summary": answer, "quote": quote, "source": source, "item_id": item_id}
+
+
 def _same_draft(cued, current):
     """True when the box still holds the question that was looked up."""
 
@@ -1548,6 +1580,7 @@ class DraftWatch:
         self._lock = threading.Lock()
         self._token = ""
         self._missed = False
+        threading.Thread(target=self._warm, name="wisp-warm", daemon=True).start()
         threading.Thread(target=self._loop, name="wisp-draft", daemon=True).start()
 
     def _load_token(self):
@@ -1639,23 +1672,31 @@ class DraftWatch:
         raw = base64.b64encode(text.encode("utf-8")).decode("ascii")
         return self._call("append " + raw, 12) == "set"
 
-    def cue(self, prompt):
+    def _post_json(self, url, payload, timeout):
         token = self._load_token()
         if not token:
             return None
-        body = json.dumps({"prompt": prompt}).encode("utf-8")
         request = urllib.request.Request(
-            "http://127.0.0.1:8765/wisp/cue",
-            data=body,
+            url,
+            data=json.dumps(payload).encode("utf-8"),
             headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=18) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except (OSError, urllib.error.URLError, UnicodeError, json.JSONDecodeError, TimeoutError):
             return None
         return data if isinstance(data, dict) else None
+
+    def fast_cue(self, prompt, timeout=2):
+        """Stored excerpt for the card. The caller is not waiting on a model."""
+        return self._post_json("http://127.0.0.1:8765/wisp/cue", {"prompt": prompt}, timeout)
+
+    def _warm(self):
+        started = time.perf_counter()
+        self.fast_cue("weave", timeout=12)
+        log(f"draft warm {int((time.perf_counter() - started) * 1000)}")
 
     def _loop(self):
         log("draft watch")
@@ -1666,15 +1707,15 @@ class DraftWatch:
             text = self.read()
             now = time.time()
             if text is None:
-                time.sleep(1.0)
+                time.sleep(0.3)
                 continue
             if text != last:
                 last = text
                 stable_since = now
-                time.sleep(0.4)
+                time.sleep(0.1)
                 continue
-            if now - stable_since < 0.9:
-                time.sleep(0.4)
+            if now - stable_since < 0.2:
+                time.sleep(0.1)
                 continue
             cleaned = text.replace("\ufeff", "").strip()
             if len(cleaned) < 12 or len(cleaned) > 1500 or cleaned == last_cued:
@@ -1686,17 +1727,14 @@ class DraftWatch:
                 time.sleep(0.4)
                 continue
             last_cued = cleaned
-            log("draft cue")
-            found = self.cue(cleaned)
-            current = self.read()
-            if not _same_draft(cleaned, current):
-                log("draft stale")
+            started = time.perf_counter()
+            quick = self.fast_cue(cleaned)
+            elapsed = int((time.perf_counter() - started) * 1000)
+            if quick is None:
+                log(f"draft down {elapsed}")
                 continue
-            if found is None:
-                log("draft down")
-                continue
-            log("draft shown" if offer_suggestion(found) else "draft unsure")
-            time.sleep(0.4)
+            log(f"draft shown {elapsed}" if offer_suggestion(quick) else f"draft unsure {elapsed}")
+            time.sleep(0.2)
 
 
 def main():

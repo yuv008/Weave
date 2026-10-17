@@ -92,7 +92,7 @@ async def _plain(send: Send, status: int, body: bytes, headers: list[tuple[bytes
     await send({"type": "http.response.body", "body": body})
 
 
-_CUE_CACHE_TTL = 45.0
+_CUE_CACHE_TTL = 600.0
 
 
 class BearerAuth:

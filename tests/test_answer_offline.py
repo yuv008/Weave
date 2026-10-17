@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import json
+
 import pytest
 import yaml
 from starlette.testclient import TestClient
@@ -10,12 +12,13 @@ from agents.answer import loop as loop_module
 from agents.answer.agent import AnswerAgent, build_agent
 from agents.answer.composer import Claim, TemplateComposer
 from agents.answer.intents import ALLOWED, Intent, RuleRouter
-from agents.answer.llm import LLMReply, LLMToolCall, ScriptedLLM, build_components
+from agents.answer.llm import LLMComposer, LLMPlanner, LLMReply, LLMRouter, LLMToolCall, ScriptedLLM, build_components
 from agents.answer.loop import Finish, RunState, ToolCall, run_loop
 from agents.answer.planner import DEFAULT_PLAYBOOKS, RulePlanner, playbook_for
 from agents.answer.subjects import match_subjects
 from agents.answer.validator import validate
 from agents.gate.principal import Surface
+from agents.memory.recall import recall
 from agents.mcp.server import build_app
 from agents.tools.base import Citation, PathEdge, RestrictedCitation, ToolResult
 from scripts.seed_playbooks import seed
@@ -177,13 +180,14 @@ def test_agent_writes_one_audit_row_episode_and_turns(env):
     assert [t.role for t in env.runtime.memory.turns(card.conversation_id, 10)] == ["user", "agent"]
 
 
-def test_channel_answers_keep_no_memory(env):
+def test_channel_answers_are_stored_for_the_channel_only(env):
     agent = build_agent(env.runtime)
     channel = env.resolver.for_channel("acme", "slack:C0ENGPUB", [env.fx.ids["sam"]], Surface.SLACK_CHANNEL)
-    card = agent.answer(channel, "Which SSO provider should I use?")
-    assert card.conversation_id is None and card.episode_id is None
+    card = agent.answer(channel, "Which SSO provider should I use?", conversation_id="slack:C0ENGPUB:1")
+    episode = env.runtime.memory.get_episode(card.episode_id)
+    assert episode.person_id == "slack:C0ENGPUB" and episode.audience == "slack:C0ENGPUB"
     assert "recall_memory" not in [s["tool"] for s in card.trace]
-    assert env.runtime.memory.episodes == {}
+    assert recall(env.runtime.context(principal(env, "sam")), "SSO provider", 5) == []
 
 
 def test_hidden_count_shows_only_with_the_notice_on(env, monkeypatch):
@@ -225,13 +229,101 @@ def test_llm_router_falls_back_to_rules_on_a_bad_reply():
     assert router.route("Who owns the SSO integration?").intent == Intent.OWNERSHIP
 
 
-def test_provider_without_adapter_is_refused_and_none_is_rule_based():
-    cfg = load_config()
-    groq = cfg.model_copy(update={"answer": cfg.answer.model_copy(update={"llm": cfg.answer.llm.model_copy(update={"provider": "groq"})})})
-    with pytest.raises(NotImplementedError):
-        build_components(groq)
-    router, planner, composer = build_components(cfg)
+def test_groq_adapter_parses_tools_and_json_and_none_stays_rule_based(monkeypatch):
+    from agents.answer.llm import GroqLLM
+
+    rules = load_config().model_copy(update={"answer": load_config().answer.model_copy(
+        update={"llm": load_config().answer.llm.model_copy(update={"provider": "none"})})})
+    router, planner, composer = build_components(rules)
     assert isinstance(router, RuleRouter) and isinstance(planner, RulePlanner)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="GROQ_API_KEY"):
+        build_components(load_config())
+
+    seen = {}
+
+    def http(url, headers, body):
+        seen["url"] = url
+        seen["auth"] = headers["Authorization"]
+        seen["agent"] = headers.get("User-Agent")
+        seen["body"] = json.loads(body)
+        if seen["body"].get("tools"):
+            payload = {"choices": [{"message": {"content": "", "tool_calls": [{
+                "function": {"name": "get_decision", "arguments": "{\"topic\": \"SSO\"}"},
+            }]}}]}
+        else:
+            payload = {"choices": [{"message": {"content": "{\"intent\": \"lookup\"}"}}]}
+        return 200, json.dumps(payload).encode()
+
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    groq = GroqLLM.from_config(load_config())
+    groq._http = http
+    tool = groq.complete([{"role": "user", "content": "Which provider?"}], tools=[{"type": "function"}])
+    parsed = groq.complete([{"role": "user", "content": "classify"}], json_schema={"type": "object"})
+    assert tool.tool_calls[0].name == "get_decision" and tool.tool_calls[0].arguments == {"topic": "SSO"}
+    assert parsed.data == {"intent": "lookup"}
+    assert seen["auth"] == "Bearer gsk-test" and seen["agent"] == "weave-agent" and "gsk-test" not in seen["body"]
+    assert "gsk-test" not in repr(groq)
+    router, planner, composer = build_components(load_config())
+    assert isinstance(router, LLMRouter) and isinstance(planner, LLMPlanner) and isinstance(composer, LLMComposer)
+
+
+def test_groq_bucket_waits_out_a_burst_over_rpm(monkeypatch):
+    from agents.answer.llm import GroqLLM
+
+    loaded = load_config().answer.llm
+    assert (loaded.provider, loaded.model, loaded.api_key_env, loaded.rpm) == (
+        "groq", "openai/gpt-oss-120b", "GROQ_API_KEY", 30,
+    )
+    now = {"t": 0.0}
+    log = []
+
+    def clock():
+        return now["t"]
+
+    def sleep(seconds):
+        log.append(("wait", seconds))
+        now["t"] += seconds
+
+    def http(url, headers, body):
+        assert headers["Authorization"] == "Bearer gsk-test"
+        assert b"gsk-test" not in body
+        parsed = json.loads(body)
+        assert "gsk-test" not in json.dumps(parsed)
+        log.append(("send", clock()))
+        payload = {"choices": [{"message": {"content": "{\"intent\": \"lookup\"}"}}]}
+        return 200, json.dumps(payload).encode()
+
+    tuned = load_config().model_copy(update={"answer": load_config().answer.model_copy(
+        update={"llm": loaded.model_copy(update={"rpm": 2})})})
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    groq = GroqLLM.from_config(tuned, clock=clock, sleep=sleep)
+    groq._http = http
+    message = [{"role": "user", "content": "classify"}]
+    for _ in range(2):
+        assert groq.complete(message, json_schema={"type": "object"}).data == {"intent": "lookup"}
+    assert log == [("send", 0.0), ("send", 0.0)]
+    assert groq.complete(message, json_schema={"type": "object"}).data == {"intent": "lookup"}
+    assert log[2][0] == "wait" and log[2][1] == pytest.approx(30)
+    assert log[3][0] == "send" and log[3][1] == pytest.approx(30)
+
+
+def test_scripted_and_rule_paths_do_not_take_a_groq_slot(monkeypatch):
+    from agents.answer.llm import TokenBucket
+
+    def entered(self):
+        raise AssertionError("groq limiter entered")
+
+    monkeypatch.setattr(TokenBucket, "acquire", entered)
+    rules = load_config().model_copy(update={"answer": load_config().answer.model_copy(
+        update={"llm": load_config().answer.llm.model_copy(update={"provider": "none"})})})
+    router, planner, composer = build_components(rules)
+    assert isinstance(router, RuleRouter) and isinstance(planner, RulePlanner) and isinstance(composer, TemplateComposer)
+    assert router.route("Who owns the SSO integration?").intent == Intent.OWNERSHIP
+    scripted = ScriptedLLM([LLMReply(data={"intent": "lookup"})])
+    router, _, _ = build_components(load_config(), scripted)
+    assert router.route("Which SSO provider?").intent == Intent.LOOKUP
+    assert scripted.requests
 
 
 def test_playbooks_fall_back_to_defaults_and_prefer_the_role(env):

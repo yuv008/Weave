@@ -8,7 +8,7 @@ import json
 import os
 import time
 
-from fastapi import FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.answer.claims import record_commitment, record_figure, supersede_claim
@@ -17,11 +17,53 @@ from app.ingest.records import MemoryStore, postgres_store
 from app.github.events import apply_github_event, verify_github_signature
 from app.slack.events import apply_slack_event, verify_slack_signature
 
+_AUTO = object()
+
 
 def _records(app):
     if app.state.records is None:
         app.state.records = postgres_store()
     return app.state.records
+
+
+def _claims_for(app, payload: dict):
+    """Claim store for a mention or DM. ``None`` when this process does not answer Slack."""
+
+    from agents.slack.accept import is_answer_event
+
+    event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+    if not is_answer_event(event):
+        return None
+    if app.state.reply_claims is not _AUTO:
+        return app.state.reply_claims
+    if not os.environ.get("SLACK_BOT_TOKEN"):
+        return None
+    from agents.slack.claims import PostgresReplyClaims
+    from shared.pg import connect_pg
+
+    return PostgresReplyClaims(connect_pg)
+
+
+def _run_slack_reply(app, payload: dict, claims) -> None:
+    runner = app.state.slack_runner
+    if runner is not None:
+        runner(payload)
+        return
+    token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if not token or claims is None:
+        return
+    from agents.answer.agent import build_agent
+    from agents.runtime import live_runtime
+    from agents.slack.client import SlackApi
+    from agents.slack.people import parse_user_map
+    from agents.slack.reply import answer_event
+
+    runtime = live_runtime()
+    answer_event(
+        payload, runtime=runtime, agent=build_agent(runtime), slack=SlackApi(token), claims=claims,
+        tenant=app.state.tenant_id or runtime.cfg.tenant,
+        user_map=parse_user_map(os.environ.get("SLACK_USER_MAP")),
+    )
 
 
 def create_app(
@@ -38,6 +80,8 @@ def create_app(
     github_repo: str | None = None,
     github_connection_id: str | None = None,
     store=None,
+    reply_claims=_AUTO,
+    slack_runner=None,
 ) -> FastAPI:
     app = FastAPI()
     app.state.graph = graph
@@ -61,13 +105,15 @@ def create_app(
     app.state.github_connection_id = (
         github_connection_id if github_connection_id is not None else os.environ.get("GITHUB_CONNECTION_ID", "")
     )
+    app.state.reply_claims = reply_claims
+    app.state.slack_runner = slack_runner
 
     @app.get("/health")
     def health():
         return {"ok": True}
 
     @app.post("/slack/events")
-    async def slack_events(request: Request):
+    async def slack_events(request: Request, background: BackgroundTasks):
         body = await request.body()
         if not verify_slack_signature(
             app.state.signing_secret,
@@ -78,21 +124,36 @@ def create_app(
         ):
             return JSONResponse({"error": "invalid signature"}, status_code=401)
         payload = json.loads(body)
-        target = app.state.graph
-        if target is None:
-            from app.graph.client import connect_graph
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "invalid json"}, status_code=400)
 
-            target = connect_graph()
-        result = apply_slack_event(
-            payload,
-            target,
-            store=_records(app),
-            tenant_id=app.state.tenant_id,
-            connection_id=app.state.connection_id,
-            workspace_id=app.state.workspace_id,
-            workspace_domain=app.state.workspace_domain or None,
+        def ingest() -> None:
+            target = app.state.graph
+            if target is None:
+                from app.graph.client import connect_graph
+
+                target = connect_graph()
+            apply_slack_event(
+                payload,
+                target,
+                store=_records(app),
+                tenant_id=app.state.tenant_id,
+                connection_id=app.state.connection_id,
+                workspace_id=app.state.workspace_id,
+                workspace_domain=app.state.workspace_domain or None,
+            )
+
+        claims = _claims_for(app, payload)
+
+        def reply() -> None:
+            _run_slack_reply(app, payload, claims)
+
+        from agents.slack.accept import accept
+
+        return accept(
+            payload, ingest=ingest, reply=reply, spawn=background.add_task, claims=claims,
+            tenant=app.state.tenant_id,
         )
-        return result
 
     @app.post("/github/webhook")
     async def github_webhook(request: Request):

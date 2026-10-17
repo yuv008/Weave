@@ -59,6 +59,25 @@ def history(ctx: ToolContext, conversation_id: str, limit: int = 10) -> list[Tur
     """Earlier turns of the caller's own conversation, each re-gated."""
 
     own_conversation(ctx, conversation_id)
+    return _gated_turns(ctx, conversation_id, limit)
+
+
+def shared_history(ctx: ToolContext, conversation_id: str, audience: str, limit: int = 10) -> list[Turn]:
+    """Earlier turns of a channel thread, re-gated for the channel principal.
+
+    The conversation belongs to the channel group, not to the person who asked.
+    A missing thread is empty, not an error.
+    """
+
+    if ctx.memory is None or not audience:
+        return []
+    conv = ctx.memory.get_conversation(conversation_id)
+    if conv is None or conv.tenant != ctx.principal.tenant or conv.person_id != audience:
+        return []
+    return _gated_turns(ctx, conversation_id, limit)
+
+
+def _gated_turns(ctx: ToolContext, conversation_id: str, limit: int) -> list[Turn]:
     turns = ctx.memory.turns(conversation_id, limit)
     visible = visible_node_ids(ctx, [i for t in turns for i in t.node_ids])
     return [

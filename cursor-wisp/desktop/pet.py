@@ -1,12 +1,18 @@
 """A desktop companion. It hangs beside the text caret while you type.
 
-It notices that keys were pressed. It does not read or store what you typed.
+It reads the Cursor chat draft so it can suggest a note before you send.
+The draft is kept in memory for that lookup and is never written to the log.
 Left-click and drag the body to move it. Right-click nudges it.
 Double right-click changes character. Ctrl+Alt+. brings it to the mouse.
 Ctrl+Alt+W closes it.
+
+POST /suggestion on 127.0.0.1 pings the pet, then opens a card to its left.
 """
 
+import array
+import base64
 import ctypes
+import io
 import json
 import math
 import os
@@ -15,7 +21,12 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
+import wave
+import winsound
 from ctypes import wintypes
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 user32 = ctypes.windll.user32
@@ -27,10 +38,66 @@ if not user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
     user32.SetProcessDPIAware()
 
 HERE = Path(__file__).resolve().parent
+REPO = HERE.parent.parent
 FRAME = HERE.parent / "overlay" / "wisp-frame.html"
 LOG = HERE / "pet.log"
+PORT_FILE = HERE / "wisp.port"
+ACCEPT_FILE = HERE / "wisp-accept.json"
 WIDTH = 300
 HEIGHT = 260
+OPEN_WIDTH = 560
+OPEN_HEIGHT = 280
+IGNORE_FOR = 10 * 60
+SUGGEST_BODY_MAX = 65536
+ALERT_FOR = 1.25
+
+
+def _notice_wav():
+    """Two short rising notes. Bip, then a slightly higher bip."""
+    rate = 22050
+    total = int(rate * 0.62)
+    samples = [0.0] * total
+
+    def tone(t0, dur, f0, f1, amp):
+        start = int(t0 * rate)
+        count = int(dur * rate)
+        for i in range(count):
+            idx = start + i
+            if idx >= total:
+                break
+            u = i / count
+            env = (u / 0.12) if u < 0.12 else math.exp(-5.4 * (u - 0.12))
+            freq = f0 * ((f1 / f0) ** u)
+            phase = 2 * math.pi * freq * (i / rate)
+            samples[idx] += amp * env * (math.sin(phase) + 0.22 * math.sin(phase * 2))
+
+    tone(0.02, 0.15, 784, 1046, 0.62)
+    tone(0.30, 0.18, 1046, 1568, 0.55)
+    peak = max(abs(sample) for sample in samples) or 1.0
+    pcm = array.array("h")
+    for sample in samples:
+        pcm.append(int(max(-1.0, min(1.0, sample / peak * 0.62)) * 32000))
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(pcm.tobytes())
+    return buf.getvalue()
+
+
+NOTICE_WAV = _notice_wav()
+
+
+def play_notice():
+    def run():
+        try:
+            winsound.PlaySound(NOTICE_WAV, winsound.SND_MEMORY | winsound.SND_NODEFAULT)
+        except RuntimeError:
+            log("notice sound failed")
+
+    threading.Thread(target=run, name="wisp-notice", daemon=True).start()
+
 
 TYPE_KEYS = (
     list(range(0x30, 0x3A))
@@ -108,6 +175,26 @@ user32.GetCursorPos.restype = wintypes.BOOL
 user32.ScreenToClient.argtypes = [wintypes.HWND, ctypes.POINTER(POINT)]
 user32.ScreenToClient.restype = wintypes.BOOL
 user32.EnumChildWindows.restype = wintypes.BOOL
+user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+user32.SetForegroundWindow.restype = wintypes.BOOL
+user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+user32.AttachThreadInput.restype = wintypes.BOOL
+user32.keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ctypes.c_size_t]
+user32.keybd_event.restype = None
+kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+kernel32.OpenProcess.restype = wintypes.HANDLE
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.restype = wintypes.BOOL
+kernel32.QueryFullProcessImageNameW.argtypes = [
+    wintypes.HANDLE,
+    wintypes.DWORD,
+    ctypes.c_wchar_p,
+    ctypes.POINTER(wintypes.DWORD),
+]
+kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+KEYEVENTF_KEYUP = 0x0002
 
 HWND_TOPMOST = wintypes.HWND(-1)
 SWP_NOSIZE = 0x0001
@@ -132,6 +219,289 @@ def log(message):
             handle.write(time.strftime("%H:%M:%S ") + message + "\n")
     except OSError:
         pass
+
+
+class SuggestState:
+    """The card the pet is showing. The suggestion text is never written to the log."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.seq = 0
+        self.pending = False
+        self.open = False
+        self.turn_ended = False
+        self.summary = ""
+        self.quote = ""
+        self.source = ""
+        self.item_id = ""
+        self.ignored = {}
+
+    def blocked(self, item_id):
+        with self.lock:
+            return self.prune_blocked(item_id, time.time())
+
+    def prune_blocked(self, item_id, now):
+        dead = [key for key, until in self.ignored.items() if until <= now]
+        for key in dead:
+            del self.ignored[key]
+        until = self.ignored.get(item_id)
+        return until is not None and until > now
+
+
+suggest_state = SuggestState()
+ui_queue = queue.Queue()
+card_click = {"hwnd": 0}
+draft_watch = None
+
+
+def offer_suggestion(data):
+    """Show a found cue on the pet. Returns whether a card was queued."""
+    if not isinstance(data, dict) or data.get("state") != "found":
+        return False
+    item_id = _plain(data.get("item_id"))
+    if suggest_state.blocked(item_id):
+        return False
+    payload = {
+        "summary": _plain(data.get("summary")),
+        "quote": _plain(data.get("quote")),
+        "source": _plain(data.get("source")),
+        "item_id": item_id,
+    }
+    with suggest_state.lock:
+        suggest_state.seq += 1
+        payload["seq"] = suggest_state.seq
+        suggest_state.pending = True
+        suggest_state.turn_ended = False
+    ui_queue.put(("show", payload))
+    return True
+
+
+def _plain(value):
+    if value is None:
+        return ""
+    return str(value)
+
+
+class SuggestHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, fmt, *args):
+        return
+
+    def handle_error(self):
+        return
+
+    def _empty(self, code):
+        self.close_connection = True
+        try:
+            self.send_response(code)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        except OSError:
+            pass
+
+    def _read_body(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            return b""
+        if length <= 0:
+            return b""
+        if length > SUGGEST_BODY_MAX:
+            return None
+        return self.rfile.read(length)
+
+    def do_POST(self):
+        path = self.path.split("?", 1)[0]
+        if len(path) > 1:
+            path = path.rstrip("/")
+        body = self._read_body()
+        if path == "/turn-ended":
+            self._turn_ended()
+            return
+        if path != "/suggestion" or body is None:
+            self._empty(204 if path == "/suggestion" else 404)
+            return
+        self._suggestion(body)
+
+    def _turn_ended(self):
+        with suggest_state.lock:
+            if suggest_state.open or suggest_state.pending:
+                suggest_state.turn_ended = True
+        self._empty(204)
+
+    def _suggestion(self, body):
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self._empty(204)
+            return
+        offer_suggestion(data)
+        self._empty(204)
+
+
+def start_suggest_server():
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), SuggestHandler)
+    except OSError as error:
+        log(f"suggest bind failed: {type(error).__name__}")
+        return
+    port = int(server.server_address[1])
+    try:
+        PORT_FILE.write_text(str(port), encoding="ascii")
+    except OSError as error:
+        log(f"port file failed: {type(error).__name__}")
+        server.server_close()
+        return
+    thread = threading.Thread(target=server.serve_forever, name="wisp-suggest", daemon=True)
+    thread.start()
+    log(f"suggest 127.0.0.1:{port}")
+
+
+def cleanup_port():
+    try:
+        PORT_FILE.unlink()
+    except OSError:
+        pass
+
+
+def write_accept_file(text, item_id):
+    raw = json.dumps({"text": text, "item_id": item_id}, ensure_ascii=False).encode("utf-8")
+    tmp = ACCEPT_FILE.with_name("wisp-accept.json.tmp")
+    tmp.write_bytes(raw)
+    os.replace(tmp, ACCEPT_FILE)
+
+
+def set_click_through(enabled):
+    """WS_EX_TRANSPARENT is on while the pet is alone, off while the card can be clicked."""
+    hwnd = Pet.hwnd
+    if not hwnd:
+        return
+    style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+    updated = style
+    if enabled:
+        updated |= WS_EX_TRANSPARENT
+        updated &= ~WS_EX_NOACTIVATE
+    else:
+        updated &= ~WS_EX_TRANSPARENT
+        updated |= WS_EX_NOACTIVATE
+    if updated == style:
+        return
+    user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, updated)
+    user32.SetWindowPos(
+        hwnd,
+        HWND_TOPMOST,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+    )
+
+
+def _exe_name(hwnd):
+    if not hwnd:
+        return ""
+    try:
+        pid = wintypes.DWORD(0)
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if not pid.value:
+            return ""
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+        if not handle:
+            return ""
+        try:
+            size = wintypes.DWORD(1024)
+            buf = ctypes.create_unicode_buffer(1024)
+            if not kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                return ""
+            return Path(buf.value).name
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return ""
+
+
+def _is_cursor(hwnd):
+    return _exe_name(hwnd).lower() == "cursor.exe"
+
+
+def _focus_window(hwnd):
+    if not hwnd or not user32.IsWindow(hwnd):
+        return False
+    current_fg = user32.GetForegroundWindow()
+    if current_fg and int(current_fg) == int(hwnd):
+        return True
+    this_thread = kernel32.GetCurrentThreadId()
+    target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+    other_thread = user32.GetWindowThreadProcessId(current_fg, None) if current_fg else 0
+    attached_target = False
+    attached_other = False
+    try:
+        if target_thread and target_thread != this_thread:
+            attached_target = bool(user32.AttachThreadInput(this_thread, target_thread, True))
+        if other_thread and other_thread not in (this_thread, target_thread):
+            attached_other = bool(user32.AttachThreadInput(this_thread, other_thread, True))
+        user32.SetForegroundWindow(hwnd)
+    finally:
+        if attached_other:
+            user32.AttachThreadInput(this_thread, other_thread, False)
+        if attached_target:
+            user32.AttachThreadInput(this_thread, target_thread, False)
+    fg = user32.GetForegroundWindow()
+    return bool(fg) and int(fg) == int(hwnd)
+
+
+def send_ctrl_end():
+    """Move to the end of the chat draft. Enter would send it."""
+    try:
+        user32.keybd_event(0x11, 0, 0, 0)
+        user32.keybd_event(0x23, 0, 0, 0)
+        time.sleep(0.02)
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            user32.keybd_event(0x23, 0, KEYEVENTF_KEYUP, 0)
+            user32.keybd_event(0x11, 0, KEYEVENTF_KEYUP, 0)
+        except Exception:
+            pass
+
+
+def send_ctrl_v():
+    """Ctrl+V only. Enter would send the chat."""
+    try:
+        user32.keybd_event(0x11, 0, 0, 0)
+        user32.keybd_event(0x56, 0, 0, 0)
+        time.sleep(0.02)
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            user32.keybd_event(0x56, 0, KEYEVENTF_KEYUP, 0)
+            user32.keybd_event(0x11, 0, KEYEVENTF_KEYUP, 0)
+        except Exception:
+            pass
+
+
+def paste_into_cursor():
+    try:
+        fg = user32.GetForegroundWindow()
+        if not _is_cursor(fg):
+            saved = card_click.get("hwnd") or 0
+            saved_hwnd = wintypes.HWND(int(saved)) if saved else None
+            if not saved_hwnd or not _is_cursor(saved_hwnd):
+                return False
+            if not _focus_window(saved_hwnd):
+                return False
+        fg = user32.GetForegroundWindow()
+        if not _is_cursor(fg):
+            return False
+        return send_ctrl_v()
+    except Exception:
+        return False
 
 
 def own_the_process():
@@ -212,15 +582,24 @@ def _window_class(hwnd):
 
 
 def fullscreen(our_hwnd):
-    """A real full-screen app covers the whole monitor, including the taskbar.
+    """A borderless window that covers the whole monitor, including the taskbar.
 
-    A maximized window stops above the taskbar, so the companion stays visible.
-    The desktop window also covers the monitor, and must not count.
+    A maximized editor still has a title bar, and on this machine its rectangle
+    reaches the screen edges. The desktop window also covers the monitor, and
+    must not count.
     """
     foreground = user32.GetForegroundWindow()
     if not foreground or foreground == our_hwnd:
         return False
+    exe = _exe_name(foreground).lower()
+    if exe in {"", "cursor.exe", "explorer.exe"}:
+        return False
+    if _window_class(foreground).startswith("Chrome_WidgetWin"):
+        return False
     if _window_class(foreground) in {"Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"}:
+        return False
+    style = user32.GetWindowLongW(foreground, -16)
+    if style & 0x00C00000:
         return False
     rect = RECT()
     if not user32.GetWindowRect(foreground, ctypes.byref(rect)):
@@ -374,6 +753,13 @@ class Pet:
         self.pinned = False
         self.block_follow = False
         self.hide_logged = False
+        self.card_open = False
+        self.reveal_at = 0.0
+        self.close_at = 0.0
+        self.accept_latched = False
+        self.form = None
+        self.win_point = None
+        self.win_size = None
 
     def place_near(self, caret_x, caret_y, caret_h):
         x = caret_x - 20
@@ -549,7 +935,7 @@ class Pet:
             self.visible = False
             if not self.hide_logged:
                 self.hide_logged = True
-                log("hide fullscreen")
+                log(f"hide fullscreen {_exe_name(user32.GetForegroundWindow())} {_window_class(user32.GetForegroundWindow())}")
         elif not covered:
             self.hide_logged = False
             if click_hole["down"]:
@@ -561,13 +947,19 @@ class Pet:
             rect = RECT()
             if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
                 return
-            nx, ny = int(self.x), int(self.y)
+            nx = int(self.x)
+            ny = int(self.y)
+            tw, th = WIDTH, HEIGHT
+            if self.card_open:
+                # The pet slot stays at (self.x, self.y). The extra width hangs to its left.
+                nx -= OPEN_WIDTH - WIDTH
+                tw, th = OPEN_WIDTH, OPEN_HEIGHT
             w = rect.right - rect.left
             h = rect.bottom - rect.top
             style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
             needs_top = not (style & 0x8)
             needs_move = abs(rect.left - nx) > 1 or abs(rect.top - ny) > 1
-            needs_size = abs(w - WIDTH) > 2 or abs(h - HEIGHT) > 2
+            needs_size = abs(w - tw) > 2 or abs(h - th) > 2
             if not (needs_top or needs_move or needs_size):
                 return
             flags = SWP_NOACTIVATE
@@ -577,7 +969,10 @@ class Pet:
                 flags |= SWP_NOSIZE
             if needs_top:
                 flags |= SWP_FRAMECHANGED
-            user32.SetWindowPos(hwnd, HWND_TOPMOST, nx, ny, WIDTH, HEIGHT, flags)
+            if needs_size and self.form is not None and self.win_point is not None and self.win_size is not None:
+                self.form.Location = self.win_point(nx, ny)
+                self.form.ClientSize = self.win_size(tw, th)
+            user32.SetWindowPos(hwnd, HWND_TOPMOST, nx, ny, tw, th, flags)
 
     def bind(self):
         found = []
@@ -659,6 +1054,15 @@ def _over_pet(x, y):
     return rect.left <= x < rect.right and rect.top <= y < rect.bottom
 
 
+def _on_pet_body(x, y):
+    """The draggable pet. The card occupies the rest of the window while it is open."""
+    if pet_ref is not None and pet_ref.card_open:
+        left = int(pet_ref.x)
+        top = int(pet_ref.y)
+        return left <= x < left + WIDTH and top <= y < top + HEIGHT
+    return _over_pet(x, y)
+
+
 def _body_hit(screen_x, screen_y):
     """Screen-space hit test so DPI scaling cannot shrink the draggable area to nothing."""
     hwnd = Pet.hwnd
@@ -703,7 +1107,15 @@ def _apply_drag(pet):
 def _mouse_hook_proc(nCode, wParam, lParam):
     if nCode >= 0 and Pet.hwnd:
         info = ctypes.cast(lParam, ctypes.POINTER(MSLLHOOKSTRUCT)).contents
-        if wParam == 0x0204 and _over_pet(info.pt.x, info.pt.y):
+        if (
+            wParam == 0x0204
+            and pet_ref is not None
+            and pet_ref.card_open
+            and _over_pet(info.pt.x, info.pt.y)
+            and not _on_pet_body(info.pt.x, info.pt.y)
+        ):
+            return 1
+        if wParam == 0x0204 and _on_pet_body(info.pt.x, info.pt.y):
             now = time.time()
             lx, ly = right_click["last_pt"]
             dx = info.pt.x - lx
@@ -723,7 +1135,7 @@ def _mouse_hook_proc(nCode, wParam, lParam):
                 right_click["pending_poke"] = True
                 right_click["block_up_poke"] = False
             return 1
-        if wParam == 0x0205 and _over_pet(info.pt.x, info.pt.y):
+        if wParam == 0x0205 and _on_pet_body(info.pt.x, info.pt.y):
             if right_click["pending_poke"] and not right_click["block_up_poke"]:
                 click_hole["poke"] = True
             right_click["pending_poke"] = False
@@ -731,7 +1143,17 @@ def _mouse_hook_proc(nCode, wParam, lParam):
             return 1
         if wParam == 0x0200 and drag_state["active"]:
             drag_state["cur_pt"] = (info.pt.x, info.pt.y)
-        if wParam == 0x0201 and _over_pet(info.pt.x, info.pt.y):
+        if (
+            wParam == 0x0201
+            and pet_ref is not None
+            and pet_ref.card_open
+            and _over_pet(info.pt.x, info.pt.y)
+            and not _on_pet_body(info.pt.x, info.pt.y)
+        ):
+            fg = user32.GetForegroundWindow()
+            if fg and int(fg) != int(Pet.hwnd or 0):
+                card_click["hwnd"] = int(fg)
+        if wParam == 0x0201 and _on_pet_body(info.pt.x, info.pt.y):
             drag_state["active"] = True
             drag_state["pending"] = False
             drag_state["moved"] = False
@@ -746,7 +1168,7 @@ def _mouse_hook_proc(nCode, wParam, lParam):
             drag_state["cur_pt"] = (info.pt.x, info.pt.y)
             drag_state["up"] = True
             return 1
-        elif wParam == 0x0207 and _over_pet(info.pt.x, info.pt.y):
+        elif wParam == 0x0207 and _on_pet_body(info.pt.x, info.pt.y):
             user32.ShowWindow(Pet.hwnd, SW_HIDE)
             click_hole["down"] = True
             click_hole["show_at"] = 0.0
@@ -808,8 +1230,9 @@ def chord_press(key):
 
 def run_form():
     import clr
+    import webview
 
-    lib = Path(r"C:\Users\yuvra\AppData\Roaming\Python\Python312\site-packages\webview\lib")
+    lib = Path(webview.__file__).resolve().parent / "lib"
     os.environ["Path"] = str(lib / "runtimes" / "win-x64" / "native") + os.pathsep + os.environ.get("Path", "")
     clr.AddReference("System.Windows.Forms")
     clr.AddReference("System.Drawing")
@@ -880,36 +1303,189 @@ def run_form():
     def on_message(sender, args):
         try:
             data = json.loads(args.WebMessageAsJson)
-            if data.get("type") != "ink":
+            if isinstance(data, str):
+                data = json.loads(data)
+            if not isinstance(data, dict):
                 return
-            ink_rect["left"] = float(data["left"])
-            ink_rect["top"] = float(data["top"])
-            ink_rect["right"] = float(data["right"])
-            ink_rect["bottom"] = float(data["bottom"])
-            ink_rect["ready"] = ink_rect["right"] > ink_rect["left"] and ink_rect["bottom"] > ink_rect["top"]
-        except (TypeError, ValueError, KeyError):
-            pass
+            kind = data.get("type")
+            if kind == "ink":
+                ink_rect["left"] = float(data["left"])
+                ink_rect["top"] = float(data["top"])
+                ink_rect["right"] = float(data["right"])
+                ink_rect["bottom"] = float(data["bottom"])
+                ink_rect["ready"] = ink_rect["right"] > ink_rect["left"] and ink_rect["bottom"] > ink_rect["top"]
+                return
+            if kind == "accept":
+                on_accept(data)
+                return
+            if kind == "ignore":
+                on_ignore(data)
+                return
+        except Exception as error:
+            log(f"message {type(error).__name__}")
 
     view.NavigationCompleted += on_nav
     Pet.hwnd = hwnd
     release_owner(hwnd)
-    view.EnsureCoreWebView2Async(None)
-    log(f"window {hwnd} style {user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & 0xFFFFFFFF:08x}")
+    set_click_through(True)
 
     focus = FocusWatch()
     pet = Pet(focus)
     pet.x, pet.y = spot
+    pet.form = form
+    pet.win_point = Point
+    pet.win_size = Size
     global pet_ref
     pet_ref = pet
     look_state = {"gx": 0.0, "gy": 0.0, "reading": False, "mood": "", "flip": 1}
 
+    def push_suggestion(summary, quote, source, item_id):
+        if view.CoreWebView2 is None:
+            return
+        message = json.dumps(
+            {"summary": summary, "quote": quote, "source": source, "item_id": item_id}
+        )
+        view.CoreWebView2.ExecuteScriptAsync("weaveSuggest(" + message + ")")
+
+    def open_card(payload):
+        with suggest_state.lock:
+            if payload.get("seq") != suggest_state.seq:
+                return
+            if suggest_state.prune_blocked(payload.get("item_id") or "", time.time()):
+                suggest_state.pending = False
+                return
+            suggest_state.pending = False
+            suggest_state.open = True
+            suggest_state.summary = payload.get("summary") or ""
+            suggest_state.quote = payload.get("quote") or ""
+            suggest_state.source = payload.get("source") or ""
+            suggest_state.item_id = payload.get("item_id") or ""
+            summary = suggest_state.summary
+            quote = suggest_state.quote
+            source = suggest_state.source
+            item_id = suggest_state.item_id
+        pet.card_open = False
+        pet.reveal_at = time.time() + ALERT_FOR
+        pet.close_at = 0.0
+        pet.accept_latched = False
+        set_click_through(True)
+        pet.apply()
+        push_suggestion(summary, quote, source, item_id)
+        play_notice()
+        log("card alert")
+
+    def reveal_card():
+        pet.reveal_at = 0.0
+        with suggest_state.lock:
+            if not suggest_state.open:
+                return
+        pet.card_open = True
+        set_click_through(False)
+        pet.apply()
+        if view.CoreWebView2 is not None:
+            view.CoreWebView2.ExecuteScriptAsync("weaveSuggestReveal()")
+        log("card open")
+
+    def close_card():
+        with suggest_state.lock:
+            suggest_state.open = False
+            if not suggest_state.pending:
+                suggest_state.turn_ended = False
+        pet.card_open = False
+        pet.reveal_at = 0.0
+        pet.close_at = 0.0
+        pet.accept_latched = False
+        set_click_through(True)
+        if view.CoreWebView2 is not None:
+            view.CoreWebView2.ExecuteScriptAsync("weaveSuggestClose()")
+        pet.apply()
+        log("card close")
+
+    def drain_cards():
+        if not painted["ok"] or view.CoreWebView2 is None:
+            return
+        while True:
+            try:
+                kind, payload = ui_queue.get_nowait()
+            except queue.Empty:
+                return
+            if kind == "show":
+                try:
+                    open_card(payload)
+                except Exception as error:
+                    log(f"card open failed: {type(error).__name__}")
+
+    def copy_clipboard(text):
+        try:
+            WinForms.Clipboard.SetText(text)
+            return True
+        except Exception:
+            return False
+
+    def on_accept(_data):
+        if not pet.card_open or pet.accept_latched:
+            return
+        pet.accept_latched = True
+        with suggest_state.lock:
+            text = f"{suggest_state.summary}\n{suggest_state.source}: {suggest_state.quote}"
+            item_id = suggest_state.item_id
+            ended = suggest_state.turn_ended
+            suggest_state.open = False
+        inserted = draft_watch.append(text) if draft_watch is not None else False
+        if not inserted and draft_watch is not None and draft_watch.focus():
+            copied = copy_clipboard("\n" + text)
+            if copied:
+                send_ctrl_end()
+                inserted = paste_into_cursor()
+        if inserted:
+            note = "Added to the prompt you are typing"
+            if view.CoreWebView2 is not None:
+                view.CoreWebView2.ExecuteScriptAsync("weaveSuggestStatus(" + json.dumps(note) + ")")
+            pet.close_at = time.time() + 1.2
+            log("accept draft")
+            return
+        if not ended:
+            try:
+                write_accept_file(text, item_id)
+                log("accept file")
+            except OSError:
+                log("accept file failed")
+            close_card()
+            return
+        copied = copy_clipboard(text)
+        pasted = paste_into_cursor() if copied else False
+        note = "Pasted into the chat box" if pasted else "Copied \u2014 paste it into the chat"
+        if view.CoreWebView2 is not None:
+            view.CoreWebView2.ExecuteScriptAsync("weaveSuggestStatus(" + json.dumps(note) + ")")
+        pet.close_at = time.time() + 1.2
+        log("accept paste" if pasted else "accept copy")
+
+    def on_ignore(data):
+        item_id = ""
+        if isinstance(data, dict) and data.get("item_id") is not None:
+            item_id = str(data.get("item_id"))
+        if not item_id:
+            with suggest_state.lock:
+                item_id = suggest_state.item_id
+        if item_id:
+            with suggest_state.lock:
+                suggest_state.ignored[item_id] = time.time() + IGNORE_FOR
+            log("card ignore")
+        if pet.card_open:
+            close_card()
+
+    view.EnsureCoreWebView2Async(None)
+    log(f"window {hwnd} style {user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & 0xFFFFFFFF:08x}")
+
     def tick(sender, event):
         try:
+            drain_cards()
             if not noted["hook"]:
                 noted["hook"] = True
                 log("ticking")
                 threading.Thread(target=_hook_loop, name="wisp-click", daemon=True).start()
             if chord(0x57):
+                cleanup_port()
                 os._exit(0)
             recall_down = chord(0xBE) or chord(0x6E)
             if recall_down and not pointer_edge["recall"]:
@@ -921,6 +1497,10 @@ def run_form():
             pointer_edge["recall"] = recall_down
             if _apply_drag(pet):
                 return
+            if pet.reveal_at and time.time() >= pet.reveal_at:
+                reveal_card()
+            if pet.close_at and time.time() >= pet.close_at:
+                close_card()
             if click_hole["cycle"] and view.CoreWebView2 is not None:
                 click_hole["cycle"] = False
                 view.CoreWebView2.ExecuteScriptAsync("weaveNext()")
@@ -945,16 +1525,196 @@ def run_form():
     WinForms.Application.Run()
 
 
+def _same_draft(cued, current):
+    """True when the box still holds the question that was looked up."""
+
+    def norm(value):
+        return " ".join((value or "").replace("\ufeff", "").split()).casefold()
+
+    left, right = norm(cued), norm(current)
+    if len(right) < 12:
+        return False
+    if left == right or right.startswith(left) or left.startswith(right):
+        return True
+    return len(left) >= 12 and (left[:48] in right or right[:48] in left)
+
+
+class DraftWatch:
+    """Reads the Cursor chat box and asks for a note before the prompt is sent."""
+
+    def __init__(self):
+        self._proc = None
+        self._lines = queue.Queue()
+        self._lock = threading.Lock()
+        self._token = ""
+        self._missed = False
+        threading.Thread(target=self._loop, name="wisp-draft", daemon=True).start()
+
+    def _load_token(self):
+        if self._token:
+            return self._token
+        for name in (".env.local", ".env", ".env.tokens"):
+            path = REPO / name
+            if not path.is_file():
+                continue
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+            for line in lines:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                key, value = stripped.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        self._token = os.environ.get("WEAVE_VIEWER_TOKEN") or os.environ.get("WEAVE_TOKEN_SAM") or ""
+        return self._token
+
+    def _start(self):
+        if self._proc and self._proc.poll() is None:
+            return
+        self._proc = subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", str(HERE / "composer.ps1")],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            creationflags=0x08000000,
+        )
+        threading.Thread(target=self._read, args=(self._proc,), name="wisp-draft-read", daemon=True).start()
+
+    def _read(self, proc):
+        while True:
+            raw = proc.stdout.readline()
+            if not raw:
+                break
+            self._lines.put(raw)
+
+    def _drop(self):
+        proc = self._proc
+        self._proc = None
+        if proc is not None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        while True:
+            try:
+                self._lines.get_nowait()
+            except queue.Empty:
+                break
+
+    def _call(self, command, timeout):
+        with self._lock:
+            self._start()
+            try:
+                self._proc.stdin.write((command + "\n").encode("utf-8"))
+                self._proc.stdin.flush()
+                raw = self._lines.get(timeout=timeout)
+            except (OSError, AttributeError, queue.Empty):
+                self._drop()
+                return ""
+        if not raw:
+            return ""
+        if b"\x00" in raw[:8]:
+            return raw.decode("utf-16", "replace").strip()
+        return raw.decode("utf-8", "replace").strip()
+
+    def read(self):
+        line = self._call("read", 30)
+        if not line.startswith("b64:"):
+            if not self._missed:
+                self._missed = True
+                log("draft miss")
+            return None
+        self._missed = False
+        try:
+            return base64.b64decode(line[4:], validate=True).decode("utf-8")
+        except (ValueError, UnicodeError):
+            return None
+
+    def focus(self):
+        return self._call("focus", 12) == "ok"
+
+    def append(self, text):
+        raw = base64.b64encode(text.encode("utf-8")).decode("ascii")
+        return self._call("append " + raw, 12) == "set"
+
+    def cue(self, prompt):
+        token = self._load_token()
+        if not token:
+            return None
+        body = json.dumps({"prompt": prompt}).encode("utf-8")
+        request = urllib.request.Request(
+            "http://127.0.0.1:8765/wisp/cue",
+            data=body,
+            headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=18) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except (OSError, urllib.error.URLError, UnicodeError, json.JSONDecodeError, TimeoutError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _loop(self):
+        log("draft watch")
+        last = None
+        stable_since = 0.0
+        last_cued = None
+        while True:
+            text = self.read()
+            now = time.time()
+            if text is None:
+                time.sleep(1.0)
+                continue
+            if text != last:
+                last = text
+                stable_since = now
+                time.sleep(0.4)
+                continue
+            if now - stable_since < 0.9:
+                time.sleep(0.4)
+                continue
+            cleaned = text.replace("\ufeff", "").strip()
+            if len(cleaned) < 12 or len(cleaned) > 1500 or cleaned == last_cued:
+                time.sleep(0.5)
+                continue
+            with suggest_state.lock:
+                busy = suggest_state.open or suggest_state.pending
+            if busy:
+                time.sleep(0.4)
+                continue
+            last_cued = cleaned
+            log("draft cue")
+            found = self.cue(cleaned)
+            current = self.read()
+            if not _same_draft(cleaned, current):
+                log("draft stale")
+                continue
+            if found is None:
+                log("draft down")
+                continue
+            log("draft shown" if offer_suggestion(found) else "draft unsure")
+            time.sleep(0.4)
+
+
 def main():
+    global draft_watch
     own_the_process()
     log("started")
-    import clr
-    from System.Threading import ApartmentState, Thread, ThreadStart
+    start_suggest_server()
+    draft_watch = DraftWatch()
+    try:
+        import clr
+        from System.Threading import ApartmentState, Thread, ThreadStart
 
-    thread = Thread(ThreadStart(run_form))
-    thread.SetApartmentState(ApartmentState.STA)
-    thread.Start()
-    thread.Join()
+        thread = Thread(ThreadStart(run_form))
+        thread.SetApartmentState(ApartmentState.STA)
+        thread.Start()
+        thread.Join()
+    finally:
+        cleanup_port()
 
 
 if __name__ == "__main__":

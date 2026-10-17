@@ -11,9 +11,13 @@ import argparse
 import os
 import time
 
+import psycopg2
+
 from shared.config import load_config
 from shared.env import load_env
 from shared.pg import connect_pg
+
+RETRY_SECONDS = 30
 
 
 def touch(tenant: str) -> int:
@@ -42,10 +46,16 @@ def main() -> None:
     if args.every is not None and not 0 < args.every < cfg.acl_stale_minutes * 60:
         raise SystemExit(f"--every must be between 1 and {cfg.acl_stale_minutes * 60 - 1} seconds")
 
-    while True:
+    if args.every is None:
         print(f"tenant={tenant} sources_touched={touch(tenant)}", flush=True)
-        if args.every is None:
-            return
+        return
+    while True:
+        try:
+            print(f"tenant={tenant} sources_touched={touch(tenant)}", flush=True)
+        except psycopg2.Error as exc:
+            print(f"tenant={tenant} touch failed ({type(exc).__name__}); retrying in {RETRY_SECONDS}s", flush=True)
+            time.sleep(RETRY_SECONDS)
+            continue
         time.sleep(args.every)
 
 

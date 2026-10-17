@@ -1,6 +1,6 @@
 """AnswerAgent: question in, cited answer card out.
 
-1. Re-gate the conversation so far (private surfaces only).
+1. Re-gate the conversation so far (a person's own thread, or a channel thread for a channel principal).
 2. Route the question to an intent and match its subjects.
 3. Recall memory (private surfaces only; counts toward the tool budget).
 4. Run the bounded loop, compose claims, validate them, build the card.
@@ -20,7 +20,7 @@ from agents.answer.loop import Planner, RunState, ToolCall, execute, run_loop
 from agents.answer.planner import playbook_for
 from agents.answer.subjects import match_subjects, subjects_for
 from agents.answer.validator import validate
-from agents.gate.principal import Principal
+from agents.gate.principal import Kind, Principal
 from agents.memory import recall as gated
 from agents.memory.store import ConversationNotFound, Episode, new_id
 from agents.runtime import Runtime
@@ -45,7 +45,8 @@ class AnswerAgent:
 
     def answer(self, principal: Principal, question: str, *, conversation_id: str | None = None,
                request_id: str | None = None, intent: Intent | str | None = None,
-               subject_ids: list[str] | None = None, fact_ids: list[str] | None = None) -> AnswerCard:
+               subject_ids: list[str] | None = None, fact_ids: list[str] | None = None,
+               ensure_conversation: bool = False) -> AnswerCard:
         """Answer ``question`` as ``principal``.
 
         Internal callers (the watcher handoff) may fix the ``intent`` (the
@@ -61,7 +62,15 @@ class AnswerAgent:
         ctx = self.runtime.context(principal, agent=self.agent, episode_id=episode_id)
         private = gated.namespace(ctx) is not None and ctx.memory is not None
 
-        history = gated.history(ctx, conversation_id, HISTORY_TURNS) if conversation_id else []
+        channel = principal.channel_group if principal.kind is Kind.CHANNEL else None
+        shared = channel is not None and ctx.memory is not None
+        if conversation_id and private:
+            missing = ensure_conversation and ctx.memory.get_conversation(conversation_id) is None
+            history = [] if missing else gated.history(ctx, conversation_id, HISTORY_TURNS)
+        elif conversation_id and shared:
+            history = gated.shared_history(ctx, conversation_id, channel, HISTORY_TURNS)
+        else:
+            history = []
         route = Route(Intent(intent), "given") if intent else self.router.route(question)
         state = RunState(question, route.intent, principal, history=history)
         state.subjects = subjects_for(ctx, subject_ids) if subject_ids else []
@@ -97,23 +106,43 @@ class AnswerAgent:
         if private:
             card.conversation_id, card.episode_id = self._remember(ctx, state, card, conversation_id, episode_id,
                                                                    outcome)
+        elif shared:
+            card.conversation_id, card.episode_id = self._remember_channel(
+                ctx, state, card, conversation_id, episode_id, outcome, channel,
+            )
         self._audit(principal, state, card, outcome, request_id, started)
         return card
 
     def _remember(self, ctx, state: RunState, card: AnswerCard, conversation_id, episode_id, outcome):
         memory, ns = ctx.memory, gated.namespace(ctx)
         try:
+            conversation_id = _open_conversation(
+                memory, conversation_id, ns.tenant, ns.person_id, str(ctx.principal.surface),
+                state.question[:TITLE_CHARS],
+            )
             if conversation_id is None:
-                conversation_id = memory.create_conversation(
-                    ns.tenant, ns.person_id, str(ctx.principal.surface), state.question[:TITLE_CHARS]
-                )
-            memory.add_turn(conversation_id, "user", state.question, [])
-            memory.add_turn(conversation_id, "agent", card.answer, card.node_ids)
-            memory.add_episode(Episode(
-                ns.tenant, ns.person_id, ns.agent, question=state.question, node_ids=card.node_ids,
-                intent=card.intent, tools=card.trace, outcome=outcome, conversation_id=conversation_id,
-                id=episode_id,
-            ))
+                return None, None
+            _store_episode(memory, conversation_id, ns.tenant, ns.person_id, ns.agent, "person", state, card,
+                           episode_id, outcome)
+        except Exception:
+            log.warning("memory write failed", exc_info=True)
+            return conversation_id, None
+        return conversation_id, episode_id
+
+    def _remember_channel(self, ctx, state: RunState, card: AnswerCard, conversation_id, episode_id, outcome,
+                          audience: str):
+        """Store the answer against the channel, not the person who asked."""
+
+        memory = ctx.memory
+        try:
+            conversation_id = _open_conversation(
+                memory, conversation_id, ctx.principal.tenant, audience, str(ctx.principal.surface),
+                state.question[:TITLE_CHARS],
+            )
+            if conversation_id is None:
+                return None, None
+            _store_episode(memory, conversation_id, ctx.principal.tenant, audience, self.agent, audience, state,
+                           card, episode_id, outcome)
         except Exception:
             log.warning("memory write failed", exc_info=True)
             return conversation_id, None
@@ -132,6 +161,26 @@ class AnswerAgent:
             )
         except Exception:
             log.warning("answer audit write failed (request %s)", request_id, exc_info=True)
+
+
+def _open_conversation(memory, conversation_id, tenant, person_id, surface, title) -> str | None:
+    if conversation_id:
+        existing = memory.get_conversation(conversation_id)
+        if existing is not None:
+            if (existing.tenant, existing.person_id) != (tenant, person_id):
+                return None
+            return conversation_id
+    return memory.create_conversation(tenant, person_id, surface, title, conversation_id=conversation_id)
+
+
+def _store_episode(memory, conversation_id, tenant, person_id, agent, audience, state, card, episode_id, outcome):
+    memory.add_turn(conversation_id, "user", state.question, [])
+    memory.add_turn(conversation_id, "agent", card.answer, card.node_ids)
+    memory.add_episode(Episode(
+        tenant, person_id, agent, question=state.question, node_ids=card.node_ids,
+        intent=card.intent, tools=card.trace, outcome=outcome, conversation_id=conversation_id,
+        audience=audience, id=episode_id,
+    ))
 
 
 def build_agent(runtime: Runtime, llm=None, agent: str = "answer") -> AnswerAgent:

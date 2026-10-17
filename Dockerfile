@@ -18,6 +18,7 @@ COPY shared shared
 COPY agents agents
 COPY fixtures fixtures
 COPY config config
+COPY scripts scripts
 
 RUN pip install --no-cache-dir . \
     && if [ "$INSTALL_EMBED" = "1" ]; then pip install --no-cache-dir ".[embed]"; fi \

@@ -7,10 +7,8 @@ venv
 .env.*
 secrets
 tests
-frontend
 Documents
 tools
 *.md
 compose.deploy.yaml
 docker-compose.yml
-deploy

@@ -17,7 +17,7 @@ from datetime import datetime
 from functools import partial
 from typing import Protocol
 
-from shared.pg import connect_pg
+from shared.pg import connect_pg, use_tenant
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,7 @@ class PostgresOutbox:
     def claim(self, tenant: str, *, skip: Collection[str] = ()) -> Iterator[ChangeEvent | None]:
         conn = self._connect()
         try:
+            use_tenant(conn, tenant)
             with conn.cursor() as cur:
                 cur.execute(_CLAIM, (tenant, list(skip)))
                 row = cur.fetchone()

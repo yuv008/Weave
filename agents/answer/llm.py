@@ -1,16 +1,22 @@
-"""The LLM path, behind ``answer.llm.provider``. No provider is chosen yet.
+"""The LLM path, behind ``answer.llm.provider``.
 
 ``LLM`` is the one interface a provider adapter implements. ``LLMRouter``,
 ``LLMPlanner`` and ``LLMComposer`` sit behind it; the loop, its guards and
 the citation validator are the same as on the rule path, so a model can only
 call tools the intent allows, only with ids already seen, and only claims
-with evidence from this run survive. ``ScriptedLLM`` drives the tests.
-
-Adding a provider: write a class with ``complete`` (OpenAI-style messages and
-function tools in, ``LLMReply`` out), then construct it in ``build_components``.
+with evidence from this run survive. ``provider: none`` keeps the rule-based
+components. ``provider: groq`` uses ``GroqLLM`` and the key named by
+``api_key_env`` (``GROQ_API_KEY``). Groq calls share a process-local token
+bucket (``answer.llm.rpm``) and wait when it is empty. ``ScriptedLLM`` drives
+the tests and does not take a slot.
 """
 
 import json
+import os
+import threading
+import time
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -214,6 +220,142 @@ class LLMComposer:
         return claim
 
 
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
+_buckets: dict[int, "TokenBucket"] = {}
+_buckets_lock = threading.Lock()
+
+
+class TokenBucket:
+    """Process-local bucket: ``rpm`` calls per minute, then wait for a token."""
+
+    def __init__(self, rpm: int, *, clock=None, sleep=None):
+        if rpm <= 0:
+            raise ValueError("rpm must be positive")
+        self.rpm = rpm
+        self.capacity = float(rpm)
+        self._interval = 60.0 / float(rpm)
+        self._clock = clock or time.monotonic
+        self._sleep = sleep or time.sleep
+        self._lock = threading.Lock()
+        self._tokens = self.capacity
+        self._updated = self._clock()
+
+    def acquire(self) -> None:
+        """Take one token, waiting outside the lock while the bucket is empty."""
+
+        while True:
+            with self._lock:
+                now = self._clock()
+                elapsed = now - self._updated
+                if elapsed < 0:
+                    elapsed = 0.0
+                self._updated = now
+                self._tokens = min(self.capacity, self._tokens + elapsed / self._interval)
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return
+                wait = (1.0 - self._tokens) * self._interval
+            self._sleep(wait)
+
+
+def _shared_bucket(rpm: int) -> TokenBucket:
+    """One bucket per rate for every Groq client in this process."""
+
+    with _buckets_lock:
+        bucket = _buckets.get(rpm)
+        if bucket is None:
+            bucket = TokenBucket(rpm)
+            _buckets[rpm] = bucket
+        return bucket
+
+
+class GroqLLM:
+    """Groq's OpenAI-compatible chat API. The key is sent only as a bearer token."""
+
+    def __init__(self, *, model: str, api_key: str, base_url: str = GROQ_URL, http=None,
+                 env_name: str = "GROQ_API_KEY", rpm: int = 30, clock=None, sleep=None):
+        if not api_key:
+            raise RuntimeError(f"{env_name} is not set")
+        self.model = model or DEFAULT_GROQ_MODEL
+        self._api_key = api_key
+        self._url = base_url or GROQ_URL
+        self._http = http or _groq_http
+        # A fake clock stays on its own bucket so tests do not drain the process limiter.
+        self._bucket = TokenBucket(rpm, clock=clock, sleep=sleep) if clock or sleep else _shared_bucket(rpm)
+
+    def __repr__(self) -> str:
+        return f"GroqLLM(model={self.model!r})"
+
+    @classmethod
+    def from_config(cls, cfg: WeaveConfig, *, clock=None, sleep=None) -> "GroqLLM":
+        llm = cfg.answer.llm
+        env_name = llm.api_key_env or "GROQ_API_KEY"
+        return cls(model=llm.model or DEFAULT_GROQ_MODEL, api_key=os.environ.get(env_name, ""),
+                   base_url=llm.base_url or GROQ_URL, env_name=env_name, rpm=llm.rpm,
+                   clock=clock, sleep=sleep)
+
+    def complete(self, messages, tools=None, json_schema=None) -> LLMReply:
+        payload: dict = {"model": self.model, "messages": list(messages), "temperature": 0}
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        if json_schema is not None:
+            payload["response_format"] = {"type": "json_object"}
+            payload["messages"] = [*payload["messages"], {
+                "role": "system",
+                "content": "Reply with JSON matching this schema: " + json.dumps(json_schema),
+            }]
+        body = json.dumps(payload).encode()
+        if self._api_key.encode() in body:
+            raise RuntimeError("refusing to place the Groq key in the request body")
+        self._bucket.acquire()
+        status, raw = self._http(self._url, {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "weave-agent",
+        }, body)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Groq returned unreadable JSON ({status})") from exc
+        if status >= 400 or not isinstance(data, dict) or "error" in data and "choices" not in data:
+            error = data.get("error") if isinstance(data, dict) else None
+            message = error.get("message") if isinstance(error, dict) else None
+            if not isinstance(message, str) or not message:
+                message = "request failed"
+            raise RuntimeError(f"Groq error ({status}): {message[:200]}")
+        message = (data.get("choices") or [{}])[0].get("message") or {}
+        calls = []
+        for call in message.get("tool_calls") or []:
+            function = call.get("function") or {}
+            arguments = function.get("arguments") or {}
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments) if arguments else {}
+                except json.JSONDecodeError:
+                    arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            calls.append(LLMToolCall(str(function.get("name") or ""), arguments))
+        text = message.get("content") or ""
+        if not isinstance(text, str):
+            text = ""
+        parsed = None
+        if json_schema is not None and text.strip():
+            parsed = json.loads(text)
+        return LLMReply(text=text, tool_calls=calls, data=parsed)
+
+
+def _groq_http(url: str, headers: dict, body: bytes) -> tuple[int, bytes]:
+    request = urllib.request.Request(url, data=body, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
+
+
 def build_components(cfg: WeaveConfig, llm: LLM | None = None):
     """Router, planner and composer for ``answer.llm.provider``; ``none`` is the rule-based set."""
 
@@ -221,5 +363,8 @@ def build_components(cfg: WeaveConfig, llm: LLM | None = None):
     if llm is None:
         if provider == "none":
             return RuleRouter(), RulePlanner(), TemplateComposer()
-        raise NotImplementedError(f"no adapter for LLM provider {provider!r} yet; set answer.llm.provider: none")
+        if provider == "groq":
+            llm = GroqLLM.from_config(cfg)
+        else:
+            raise NotImplementedError(f"no adapter for LLM provider {provider!r}; use groq or none")
     return LLMRouter(llm), LLMPlanner(llm, cfg), LLMComposer(llm, cfg)

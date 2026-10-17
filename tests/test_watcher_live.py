@@ -23,8 +23,8 @@ from agents.watcher.sender import DRAFT_POINTER
 from agents.watcher.watcher import handoff_id, notice_id
 from agents.watcher.worker import tick
 from scripts.seed_playbooks import PLAYBOOKS
-from shared.config import load_config
 from shared.schema import Prop, Rel
+from tests.answer_support import rule_config
 from tests.gate_support import NOW, fixture_resolver
 from tests.tool_support import live
 
@@ -76,7 +76,7 @@ def flow3():
         memory = PostgresMemoryStore(connect_pg)
         for role, intent, steps in PLAYBOOKS:
             memory.put_playbook(tenant, role, str(intent), steps, "test")
-        runtime = Runtime(lambda t: graph, load_config(), resolver=resolver, clock=lambda: NOW,
+        runtime = Runtime(lambda t: graph, rule_config(), resolver=resolver, clock=lambda: NOW,
                           pg_connect=connect_pg, audit=MemoryAudit(), memory=memory)
         outbox = MemoryOutbox.from_fixture(fx)
         [event] = outbox.pending(tenant)

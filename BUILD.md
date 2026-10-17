@@ -144,7 +144,7 @@ Tests: `tests/test_mcp_server.py` (offline: auth, tool list, arguments, error ma
 
 ## Answer agent and memory (15 October 2026)
 
-A question goes in and a cited answer card comes out (`agents/answer/`). No LLM provider is chosen yet: with `answer.llm.provider: none`, a rule-based router, planner and composer run every flow. The LLM versions sit behind one `LLM` protocol and are tested with a scripted fake.
+A question goes in and a cited answer card comes out (`agents/answer/`). `answer.llm.provider: groq` calls Groq (`openai/gpt-oss-120b` by default) with `GROQ_API_KEY` from `.env`. `provider: none` keeps the rule-based router, planner and composer. Both paths share the same loop, guards and citation check. Tests use the rule path or a scripted fake, so they never call Groq.
 
 - **Steps:**
   1. Re-gate the conversation so far.
@@ -192,7 +192,7 @@ python -m scripts.ask --as priya "Draft a status update for Acme about SSO"
 python -m scripts.confirm_action <proposal id> accept --as priya        # or edit --text "...", or reject
 ```
 
-Adding an LLM provider: write one class with `complete(messages, tools, json_schema) -> LLMReply` in `agents/answer/llm.py`, construct it in `build_components`, and set `answer.llm` in `config/weave.yaml`.
+The Groq adapter is `GroqLLM` in `agents/answer/llm.py`. It reads `answer.llm.api_key_env` (default `GROQ_API_KEY`) and sends the key only as a bearer token. Slack replies and the watcher handoff use the same `build_agent` path, so they use Groq too. Paste the key into `.env`; do not put it in the repo.
 
 Tests:
 - `tests/test_answer_offline.py`: the 15-question set in `tests/data/questions.yaml` (intent and first tool), the guards, the validator, the card, the LLM path and the HTTP routes.
@@ -243,13 +243,29 @@ Tests:
 - `tests/test_watcher_live.py`: flow 3 on the scratch graph with Neon memory under a throwaway tenant. Only Priya is notified. There is no Provider A and no `#eng-sso` id, quote or link. Her evidence is visible to her. One handoff gives a `proposal_email` by Priya. The dry-run DM carries the pointer. A second run and a replay add nothing.
 - `tests/test_watcher_outbox_live.py`: Neon `change_event` under a throwaway tenant. Two connections get different rows, a rollback leaves the row pending, a commit marks it processed, and three threads take each row once.
 
+## Slack mentions and DMs (16 October 2026)
+
+`POST /slack/events` still verifies the signature and ingests public channel messages. An `app_mention`, a 1:1 DM (`channel_type=im`), or a group DM (`mpim`) is also answered by the answer agent in `agents/slack/`. The HTTP handler claims the event and returns immediately; ingest and the reply run after that, so a slow answer stays inside Slack's 3-second ack. The same `event_id` does not start a second reply. A per-thread lock serialises two mentions in one thread, then releases, so a later mention is still answered.
+
+- **DM:** the Slack user is resolved from `Person.slack_id`, then from `SLACK_USER_MAP` in `.env` (`U012REAL=sam`). The answer uses that person's principal on the DM surface, and the episode stays in their namespace. An unknown user gets one sentence and no graph read as them.
+- **Channel or group DM:** `conversations.members` is mapped the same way. An unmapped member still counts, at level 0. The principal's groups are `slack:{channel}` plus org-wide, not the asker's groups. The episode's `person_id` and `audience` are that channel group, so it is not recalled in anyone's DM. Follow-ups in the thread reload that conversation and re-gate each turn.
+- **DM offer:** if the channel answer has no claim or some evidence was filtered, the reply adds one line telling the asker to DM the bot. It does not include a hidden count or a second, private answer.
+- **Posting:** `chat.postMessage` in the thread, from `agents/slack/client.py`. The token stays in the Authorization header. Bot messages and the bot's own user are ignored.
+
+`migrations/006_slack_reply.sql` adds `slack_reply` and `episodes.audience` (`person` for a personal answer). Apply it on the direct Neon connection before relying on live replies.
+
+Slack app: bot scopes `app_mentions:read`, `channels:history`, `channels:read`, `chat:write`, `im:history`, `im:read`, `im:write`, `mpim:history`, `mpim:read`, `users:read`. Events: `app_mention`, `message.im`, `message.mpim`, `message.channels`. Request URL path `/slack/events`. Invite the bot, then mention it. Map each dummy member in `SLACK_USER_MAP`. Keep `python -m scripts.touch_sync --every 300` running for the `acme` fixture, or the gate hides those sources after 15 minutes.
+
+A DM mapped to Sam can cite `#eng-sso`. The same question in a channel that includes a level-0 or unmapped member cannot, and the reply offers a DM.
+
+Tests: `tests/test_slack_reply.py`. Nothing in CI posts to Slack.
+
 ## What is not built
 
 - Slack OAuth install flow
 - Person names, decisions, `MENTIONS`, files, reactions, and attachments
-- An LLM provider adapter (the answer agent runs on rule-based components)
 - Semantic memory, nightly consolidation, vector recall, and LLM-written conversation summaries
-- Live Slack sending has not run against a real tenant (the watcher's `send: slack` path is tested with a stubbed HTTP client only)
+- Live Slack sending has not run against a real workspace (mention replies and the watcher's `send: slack` path are tested with a stubbed HTTP client only)
 - A retry limit for an event that keeps failing (it is logged, audited as `error` and retried every tick)
 - A web UI and per-user ACLs
 - A live GitHub write. The connector code is in the repo. `scripts/check_github_access.py` has not been run against a token.

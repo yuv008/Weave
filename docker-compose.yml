@@ -1,6 +1,56 @@
-# Local stores for the shared contract. Both builders run the same images.
+# Local stores plus the agent server, sync worker, and static web UI.
 # FalkorDB browser UI: http://localhost:3000
+#
+# api and worker read env_file .env, which is gitignored. Compose 2.24+
+# accepts a missing file (required: false). Older Compose requires .env
+# to exist before config succeeds; copy .env.example and do not commit it.
+# When these FalkorDB and Postgres services are the stores, set
+# FALKORDB_HOST=falkordb and DATABASE_URL to host postgres. A hosted
+# FALKORDB_URL or DATABASE_URL in .env is used as written.
+#
+# Slack and GitHub webhooks are not a compose service. They stay on
+# uvicorn app.main:app port 8000 via the cloudflared flow in
+# prompts/slack-events-url.md.
 services:
+  api:
+    build: .
+    image: weave-python
+    command: ["python", "-m", "agents.mcp", "--host", "0.0.0.0", "--port", "8765"]
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8765:8765"
+    depends_on:
+      - falkordb
+      - postgres
+    restart: unless-stopped
+
+  worker:
+    build: .
+    image: weave-python
+    command: ["python", "scripts/run_worker.py"]
+    init: true
+    env_file:
+      - path: .env
+        required: false
+    # secrets/ is gitignored and is not baked into the image. Drive's
+    # default key path is secrets/gdrive-service-account.json.
+    volumes:
+      - ./secrets:/app/secrets:ro
+    depends_on:
+      - falkordb
+      - postgres
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
   falkordb:
     image: falkordb/falkordb:latest
     ports:

@@ -10,6 +10,7 @@ from collections.abc import Callable, Sequence
 from typing import Protocol
 
 from agents.gate.principal import Principal
+from shared.pg import use_tenant
 
 _INSERT = """
 INSERT INTO audit_log (
@@ -73,6 +74,7 @@ class PostgresAudit:
                 ms, kind: str, tools: list[str], conversation_id: str | None) -> None:
         conn = self._connect()
         try:
+            use_tenant(conn, principal.tenant)
             with conn.cursor() as cur:
                 cur.execute(_INSERT, (
                     principal.tenant, request_id, str(principal.surface), str(principal.kind),

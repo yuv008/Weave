@@ -1,9 +1,10 @@
-"""Run the agent server: MCP at /mcp, the answer API at /answer and /actions/{id}/confirm.
+"""Run the agent server: MCP at /mcp, the answer API at /answer and /actions/{id}/confirm, POST /wisp/cue, and GET /ops.
 
 Usage: python -m agents.mcp [--host 127.0.0.1] [--port 8765]
 
 Clients send ``Authorization: Bearer <token>``; tokens come from
-``scripts/issue_demo_tokens.py`` (or the web app later).
+``scripts/issue_demo_tokens.py`` (or the web app later). ``GET /ops`` is
+separate: it requires ``OPS_TOKEN`` and reads ``WEAVE_TENANT``.
 """
 
 import argparse

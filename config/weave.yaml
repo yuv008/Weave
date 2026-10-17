@@ -33,8 +33,12 @@ answer:
   # Read-tool results are cached per visibility hash for this long.
   cache_ttl_seconds: 60
   llm:
-    # Still open (Groq or Grok). "none" runs the rule-based components.
-    provider: none
+    # "none" runs the rule-based components. "groq" calls Groq; the key is GROQ_API_KEY.
+    provider: groq
+    model: openai/gpt-oss-120b
+    api_key_env: GROQ_API_KEY
+    # Groq calls per minute in this process; a full bucket waits for a free slot.
+    rpm: 30
 
 # Impact watcher (agents side only): python -m agents.watcher.
 watcher:

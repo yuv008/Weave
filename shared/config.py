@@ -29,7 +29,10 @@ class SourcePolicy(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    """The answer agent's model. ``none`` runs the rule-based router, planner and composer."""
+    """The agents' model. ``groq`` calls Groq; ``none`` runs the rule-based router, planner and composer.
+
+    ``rpm`` caps Groq calls in this process. A full bucket waits for a free slot.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -37,6 +40,7 @@ class LLMConfig(BaseModel):
     model: str | None = None
     base_url: str | None = None
     api_key_env: str | None = None
+    rpm: int = Field(default=30, gt=0)
 
 
 class AnswerConfig(BaseModel):

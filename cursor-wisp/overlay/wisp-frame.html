@@ -77,9 +77,238 @@
       30%, 70% { transform: scaleY(0.08); }
     }
   }
+  /* 260px card + 300px pet. The pet column stays on the right so a wider window does not slide it. */
+  #stage {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-end;
+    align-items: flex-start;
+  }
+  #pets {
+    width: 300px;
+    height: 260px;
+    flex: 0 0 300px;
+    position: relative;
+  }
+  #suggest {
+    width: 260px;
+    height: 100%;
+    flex: 0 0 260px;
+    box-sizing: border-box;
+    padding: 0;
+    position: relative;
+    display: block;
+  }
+  #suggest[hidden] { display: none !important; }
+  .suggest-card {
+    width: 232px;
+    max-height: 230px;
+    box-sizing: border-box;
+    position: absolute;
+    right: -72px;
+    top: 28px;
+    overflow: visible;
+    background: #445266;
+    color: #FFFFFF;
+    border: 2px solid #FFFFFF;
+    border-radius: 22px;
+    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.28);
+    padding: 14px 16px 12px;
+    font: 600 14px/1.4 "Segoe UI", sans-serif;
+    text-align: center;
+  }
+  .suggest-card::before,
+  .suggest-card::after {
+    content: "";
+    position: absolute;
+    border-style: solid;
+    border-color: transparent;
+  }
+  .suggest-card::before {
+    right: -16px;
+    top: 72px;
+    border-width: 11px 0 11px 16px;
+    border-left-color: #FFFFFF;
+  }
+  .suggest-card::after {
+    right: -12px;
+    top: 75px;
+    border-width: 8px 0 8px 13px;
+    border-left-color: #445266;
+  }
+  .suggest-summary {
+    margin: 0;
+    color: #FFFFFF;
+    font-size: 14.5px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .suggest-quote {
+    margin: 8px 0 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.86);
+    font-size: 12.5px;
+    font-weight: 500;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    max-height: 4.05em;
+    overflow: hidden;
+  }
+  .suggest-quote[hidden] { display: none !important; }
+  .suggest-source {
+    color: rgba(255, 255, 255, 0.62);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+    margin: 8px 0 0;
+  }
+  .suggest-source[hidden] { display: none !important; }
+  .suggest-actions {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .suggest-actions[hidden] { display: none !important; }
+  .suggest-actions button {
+    appearance: none;
+    width: 36px;
+    height: 36px;
+    border: 0;
+    border-radius: 50%;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    background: #FFFFFF;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.22);
+  }
+  .suggest-actions button svg { display: block; }
+  #suggest-accept { color: #059669; }
+  #suggest-accept:hover { background: #D1FAE5; }
+  #suggest-ignore { color: #E11D48; }
+  #suggest-ignore:hover { background: #FFE4E6; }
+  .suggest-actions button:focus-visible {
+    outline: 2px solid #FFFFFF;
+    outline-offset: 2px;
+  }
+  #alert {
+    position: absolute;
+    width: 58px;
+    height: 48px;
+    z-index: 6;
+    pointer-events: none;
+    transform: translate(-18%, -28%);
+  }
+  #alert[hidden] { display: none !important; }
+  .alert-badge {
+    position: absolute;
+    left: 6px;
+    top: 14px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #FFD0E4 0%, #FF5C9A 42%, #F43F85 78%);
+    color: #FFFFFF;
+    font: 800 16px/28px "Segoe UI", sans-serif;
+    text-align: center;
+    box-shadow: 0 0 0 2.5px #FFFFFF, 0 0 14px rgba(244, 63, 133, 0.85);
+  }
+  #alert.pop .alert-badge {
+    animation: badge-pop 0.42s cubic-bezier(.2, 1.45, .36, 1) both, badge-pulse 1.15s ease-in-out 0.42s infinite;
+  }
+  .spark {
+    position: absolute;
+    width: 2px;
+    height: 8px;
+    border-radius: 2px;
+    background: #FFFFFF;
+    transform-origin: center;
+  }
+  .spark.s1 { left: 36px; top: 2px; transform: rotate(18deg); }
+  .spark.s2 { left: 44px; top: 9px; height: 6px; transform: rotate(58deg); }
+  .spark.s3 { left: 32px; top: 0; height: 5px; transform: rotate(-28deg); }
+  .spark.s4 { left: 48px; top: 16px; width: 7px; height: 2px; }
+  #alert.pop .spark { animation: spark 0.9s ease-in-out infinite; }
+  #alert.pop .spark.s2 { animation-delay: 0.15s; }
+  #alert.pop .spark.s3 { animation-delay: 0.28s; }
+  .wave {
+    position: absolute;
+    border: 2.5px solid #F5B942;
+    border-left: 0;
+    border-radius: 0 40px 40px 0;
+    opacity: 0;
+  }
+  .wave.w1 { width: 8px; height: 12px; left: 38px; top: 20px; }
+  .wave.w2 { width: 12px; height: 18px; left: 44px; top: 17px; }
+  #alert.ping .wave.w1 { animation: wave 0.48s ease-out 0.16s 2; }
+  #alert.ping .wave.w2 { animation: wave 0.48s ease-out 0.28s 2; }
+  @keyframes badge-pop {
+    0% { transform: scale(0.15); opacity: 0; }
+    70% { transform: scale(1.14); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  @keyframes badge-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.08); }
+  }
+  @keyframes spark {
+    0%, 100% { opacity: 0.25; }
+    50% { opacity: 1; }
+  }
+  @keyframes wave {
+    0% { opacity: 0; transform: scale(0.55); }
+    35% { opacity: 1; }
+    100% { opacity: 0; transform: scale(1.12); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #alert.pop .alert-badge,
+    #alert.pop .spark,
+    #alert.ping .wave { animation: none; }
+    #alert.ping .wave { opacity: 0; }
+  }
 </style>
 </head>
 <body title="Drag with left click. Right-click nudge. Double right-click next companion">
+<div id="stage">
+<aside id="suggest" hidden>
+  <div class="suggest-card">
+    <p id="suggest-summary" class="suggest-summary"></p>
+    <blockquote id="suggest-quote" class="suggest-quote"></blockquote>
+    <div id="suggest-source" class="suggest-source"></div>
+    <div id="suggest-actions" class="suggest-actions">
+      <button type="button" id="suggest-accept" aria-label="Approve" title="Approve">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path d="M5 12.5l4.2 4.2L19 7" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <button type="button" id="suggest-ignore" aria-label="Reject" title="Reject">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path d="M7 7l10 10M17 7L7 17" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</aside>
+<div id="pets">
+<div id="alert" hidden>
+  <span class="spark s1"></span>
+  <span class="spark s2"></span>
+  <span class="spark s3"></span>
+  <span class="spark s4"></span>
+  <span class="wave w1"></span>
+  <span class="wave w2"></span>
+  <span class="alert-badge">!</span>
+</div>
 <div class="pet" data-id="wisp"><svg preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" width="140" height="176" viewBox="0 0 140 176" overflow="visible" role="img" aria-label="Wisp, classic">
   <defs>
     <radialGradient id="c-body" cx="38%" cy="32%" r="72%">
@@ -489,6 +718,8 @@
     </g></g>
   </g>
 </svg></div>
+</div>
+</div>
 <script>
   const order = ["wisp", "knot", "loaf", "pebble", "spark", "spindle"];
   let current = "wisp";
@@ -508,10 +739,121 @@
       node.classList.add("wisp-root");
     });
   }
+  let cardOpen = false;
+  let alerting = false;
+  let suggestion = null;
+  function applyPetState() {
+    const state = cardOpen ? "found" : alerting ? "alert" : "resting";
+    document.querySelectorAll("g.wisp").forEach((node) => {
+      node.setAttribute("data-state", state);
+    });
+  }
+  function placeAlert() {
+    const badge = document.getElementById("alert");
+    const pet = visiblePet();
+    const svg = pet ? pet.querySelector("svg") : null;
+    const host = document.getElementById("pets");
+    if (!badge || badge.hidden || !svg || !host) return;
+    const sr = svg.getBoundingClientRect();
+    const hr = host.getBoundingClientRect();
+    badge.style.left = Math.round(sr.left - hr.left + sr.width * 0.74) + "px";
+    badge.style.top = Math.round(sr.top - hr.top + sr.height * 0.2) + "px";
+  }
+  function showAlert() {
+    const badge = document.getElementById("alert");
+    if (!badge) return;
+    alerting = true;
+    badge.hidden = false;
+    badge.classList.remove("pop", "ping");
+    void badge.offsetWidth;
+    badge.classList.add("pop", "ping");
+    placeAlert();
+  }
+  function hideAlert() {
+    alerting = false;
+    const badge = document.getElementById("alert");
+    if (!badge) return;
+    badge.hidden = true;
+    badge.classList.remove("pop", "ping");
+  }
+  function fillSuggestion() {
+    const source = document.getElementById("suggest-source");
+    const summary = document.getElementById("suggest-summary");
+    const quote = document.getElementById("suggest-quote");
+    const actions = document.getElementById("suggest-actions");
+    if (!suggestion) return;
+    if (source) {
+      source.hidden = !suggestion.source;
+      source.textContent = suggestion.source;
+    }
+    if (summary) summary.textContent = suggestion.summary;
+    if (quote) {
+      quote.hidden = !suggestion.quote;
+      quote.textContent = suggestion.quote;
+    }
+    if (actions) actions.hidden = false;
+  }
+  function weaveSuggest(payload) {
+    payload = payload || {};
+    suggestion = {
+      summary: payload.summary || "",
+      quote: payload.quote || "",
+      source: payload.source || "",
+      item_id: payload.item_id || "",
+      pending: false,
+    };
+    cardOpen = false;
+    const card = document.getElementById("suggest");
+    if (card) card.hidden = true;
+    fillSuggestion();
+    showAlert();
+    applyPetState();
+    reportInk();
+  }
+  function weaveSuggestReveal() {
+    if (!suggestion) return;
+    cardOpen = true;
+    const card = document.getElementById("suggest");
+    if (card) card.hidden = false;
+    applyPetState();
+    reportInk();
+  }
+  function weaveSuggestStatus(text) {
+    const source = document.getElementById("suggest-source");
+    const summary = document.getElementById("suggest-summary");
+    const quote = document.getElementById("suggest-quote");
+    const actions = document.getElementById("suggest-actions");
+    if (source) source.hidden = true;
+    if (quote) quote.hidden = true;
+    if (actions) actions.hidden = true;
+    if (summary) summary.textContent = text || "";
+  }
+  function weaveSuggestClose() {
+    cardOpen = false;
+    suggestion = null;
+    hideAlert();
+    const card = document.getElementById("suggest");
+    if (card) card.hidden = true;
+    applyPetState();
+    reportInk();
+  }
+  function postCard(type) {
+    if (!suggestion || suggestion.pending) return;
+    if (!window.chrome || !chrome.webview) return;
+    suggestion.pending = true;
+    chrome.webview.postMessage({
+      type: type,
+      item_id: suggestion.item_id,
+      summary: suggestion.summary,
+      quote: suggestion.quote,
+      source: suggestion.source,
+    });
+  }
   function show(id) {
     current = id;
     try { localStorage.setItem("weave-wisp", id); } catch (e) {}
     document.querySelectorAll(".pet").forEach((pet) => { pet.hidden = pet.dataset.id !== id; });
+    applyPetState();
     reportInk();
   }
   function weaveNext() {
@@ -550,6 +892,7 @@
     const svg = pet ? pet.querySelector("svg") : null;
     if (!svg || !window.chrome || !chrome.webview) return;
     const r = svg.getBoundingClientRect();
+    placeAlert();
     chrome.webview.postMessage({
       type: "ink",
       left: r.left,
@@ -564,6 +907,14 @@
   window.weaveMood = weaveMood;
   window.weavePoke = weavePoke;
   window.reportInk = reportInk;
+  window.weaveSuggest = weaveSuggest;
+  window.weaveSuggestReveal = weaveSuggestReveal;
+  window.weaveSuggestStatus = weaveSuggestStatus;
+  window.weaveSuggestClose = weaveSuggestClose;
+  const acceptBtn = document.getElementById("suggest-accept");
+  const ignoreBtn = document.getElementById("suggest-ignore");
+  if (acceptBtn) acceptBtn.addEventListener("click", () => postCard("accept"));
+  if (ignoreBtn) ignoreBtn.addEventListener("click", () => postCard("ignore"));
   document.querySelectorAll("svg").forEach((svg) => {
     svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
   });

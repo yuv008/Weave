@@ -32,12 +32,22 @@ class SubjectGraph:
         return SimpleNamespace(result_set=[])
 
 
+def rule_config(cfg=None):
+    """The given config on the rule-based agent, so tests do not call Groq."""
+
+    cfg = cfg or load_config()
+    if cfg.answer.llm.provider == "none":
+        return cfg
+    llm = cfg.answer.llm.model_copy(update={"provider": "none"})
+    return cfg.model_copy(update={"answer": cfg.answer.model_copy(update={"llm": llm})})
+
+
 def offline_runtime(fx: Fixture | None = None, **overrides):
     fx = fx or build("acme")
     resolver, store = fixture_resolver(fx)
     graph = ReadOnlyGraph(SubjectGraph(fx), "co:acme")
     runtime = Runtime(
-        lambda tenant: graph, overrides.pop("cfg", load_config()), resolver=resolver, clock=lambda: NOW,
+        lambda tenant: graph, rule_config(overrides.pop("cfg", None)), resolver=resolver, clock=lambda: NOW,
         audit=MemoryAudit(), memory=InMemoryMemoryStore(clock=lambda: NOW), **overrides,
     )
     return SimpleNamespace(fx=fx, runtime=runtime, resolver=resolver, store=store, graph=graph)

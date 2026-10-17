@@ -105,6 +105,7 @@ class PostgresStore:
               updated_at = now()
             """,
             (record_id, tenant_id, kind, json.dumps(payload)),
+            tenant=tenant_id,
         )
         return self.get(record_id)
 
@@ -117,6 +118,7 @@ class PostgresStore:
             RETURNING id
             """,
             (record_id, tenant_id, kind, json.dumps(payload)),
+            tenant=tenant_id,
         )
         return row is not None
 
@@ -213,22 +215,24 @@ class PostgresStore:
             for row in rows
         ]
 
-    def _run(self, sql: str, params: tuple) -> None:
-        from shared.pg import connect_pg
+    def _run(self, sql: str, params: tuple, *, tenant: str | None = None) -> None:
+        from shared.pg import connect_pg, use_tenant
 
         conn = connect_pg(url=self.dsn)
         try:
+            use_tenant(conn, tenant)
             cur = conn.cursor()
             cur.execute(sql, params)
             conn.commit()
         finally:
             conn.close()
 
-    def _one(self, sql: str, params: tuple):
-        from shared.pg import connect_pg
+    def _one(self, sql: str, params: tuple, *, tenant: str | None = None):
+        from shared.pg import connect_pg, use_tenant
 
         conn = connect_pg(url=self.dsn)
         try:
+            use_tenant(conn, tenant)
             cur = conn.cursor()
             cur.execute(sql, params)
             row = cur.fetchone()

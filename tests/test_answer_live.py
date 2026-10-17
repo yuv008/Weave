@@ -11,7 +11,7 @@ from agents.runtime import Runtime
 from agents.tools.base import ToolInputError
 from agents.tools.invoke import invoke
 from scripts.seed_playbooks import seed
-from shared.config import load_config
+from tests.answer_support import rule_config
 from tests.gate_support import NOW, fixture_resolver
 from tests.tool_support import live, scratch  # noqa: F401
 
@@ -26,7 +26,7 @@ def env(scratch):
     resolver, store = fixture_resolver(fx)
     memory = InMemoryMemoryStore(clock=lambda: NOW)
     seed(memory)
-    runtime = Runtime(lambda tenant: graph, load_config(), resolver=resolver, clock=lambda: NOW,
+    runtime = Runtime(lambda tenant: graph, rule_config(), resolver=resolver, clock=lambda: NOW,
                       pg_connect=connect_pg, audit=MemoryAudit(), memory=memory)
     return fx, runtime, build_agent(runtime), resolver, store
 

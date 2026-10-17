@@ -6,7 +6,10 @@ from datetime import datetime
 
 from agents.gate.resolve import AclSnapshot, PersonInfo
 from agents.graph import ReadOnlyGraph
+from shared.pg import use_tenant
 from shared.schema import Label, Prop, Rel
+
+TOKEN_OWNER_SQL = "SELECT tenant_id, person_id FROM weave_token_owner(%s)"
 
 _PERSON = f"""
 MATCH (p:{Label.PERSON} {{{Prop.ID}: $id}})
@@ -31,10 +34,7 @@ class PostgresGateStore:
         conn = self._connect()
         try:
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT tenant_id, person_id FROM api_token WHERE token_sha256 = %s AND revoked_at IS NULL",
-                    (token_sha256,),
-                )
+                cur.execute(TOKEN_OWNER_SQL, (token_sha256,))
                 row = cur.fetchone()
         finally:
             conn.close()
@@ -43,6 +43,7 @@ class PostgresGateStore:
     def snapshot(self, tenant: str) -> AclSnapshot:
         conn = self._connect()
         try:
+            use_tenant(conn, tenant)
             with conn.cursor() as cur:
                 cur.execute("SELECT person_id, acl_group FROM group_membership WHERE tenant_id = %s", (tenant,))
                 members = cur.fetchall()

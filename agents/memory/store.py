@@ -12,6 +12,8 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Protocol
 
+from shared.pg import use_tenant
+
 
 def _json(value) -> str:
     return json.dumps(value, default=str)
@@ -39,6 +41,7 @@ class Episode:
     outcome: str = "ok"
     conversation_id: str | None = None
     feedback: dict | None = None
+    audience: str = "person"
     id: str = field(default_factory=lambda: new_id("ep"))
     created_at: datetime | None = None
 
@@ -84,7 +87,8 @@ class MemoryStore(Protocol):
     def search_episodes(self, tenant: str, person_id: str, agent: str, query: str, limit: int) -> list[Episode]: ...
     def set_feedback(self, episode_id: str, feedback: dict) -> None: ...
 
-    def create_conversation(self, tenant: str, person_id: str, surface: str, title: str) -> str: ...
+    def create_conversation(self, tenant: str, person_id: str, surface: str, title: str,
+                            conversation_id: str | None = None) -> str: ...
     def get_conversation(self, conversation_id: str) -> Conversation | None: ...
     def add_turn(self, conversation_id: str, role: str, text: str, node_ids: list[str]) -> None: ...
     def turns(self, conversation_id: str, limit: int) -> list[Turn]: ...
@@ -143,7 +147,7 @@ class InMemoryMemoryStore:
         wanted = set(terms(query))
         scored = []
         for ep in self.episodes.values():
-            if (ep.tenant, ep.person_id, ep.agent) != (tenant, person_id, agent):
+            if (ep.tenant, ep.person_id, ep.agent) != (tenant, person_id, agent) or ep.audience != "person":
                 continue
             score = len(wanted & set(terms(f"{ep.question} {ep.note}"))) if wanted else 1
             if score:
@@ -156,12 +160,17 @@ class InMemoryMemoryStore:
             if episode_id in self.episodes:
                 self.episodes[episode_id].feedback = dict(feedback)
 
-    def create_conversation(self, tenant, person_id, surface, title):
-        conv = Conversation(new_id("conv"), tenant, person_id, surface, title[:200])
+    def create_conversation(self, tenant, person_id, surface, title, conversation_id=None):
+        conv_id = conversation_id or new_id("conv")
         with self._lock:
-            self.conversations[conv.id] = conv
-            self._turns[conv.id] = []
-        return conv.id
+            existing = self.conversations.get(conv_id)
+            if existing is not None:
+                if (existing.tenant, existing.person_id) != (tenant, person_id):
+                    raise ConversationNotFound(conv_id)
+                return conv_id
+            self.conversations[conv_id] = Conversation(conv_id, tenant, person_id, surface, title[:200])
+            self._turns[conv_id] = []
+        return conv_id
 
     def get_conversation(self, conversation_id):
         found = self.conversations.get(conversation_id)
@@ -224,7 +233,7 @@ class InMemoryMemoryStore:
 
 _EPISODE_COLS = (
     "id, tenant_id, person_id, agent, question, note, node_ids, kind, intent, tools, outcome, "
-    "conversation_id, feedback, created_at"
+    "conversation_id, feedback, audience, created_at"
 )
 _TASK_COLS = (
     "id, tenant_id, kind, state, target_agent, node_ids, payload, created_by, episode_id, parent_id, "
@@ -233,9 +242,10 @@ _TASK_COLS = (
 
 
 def _episode(row) -> Episode:
-    (id_, tenant, person, agent, question, note, node_ids, kind, intent, tools, outcome, conv, feedback, at) = row
+    (id_, tenant, person, agent, question, note, node_ids, kind, intent, tools, outcome, conv, feedback,
+     audience, at) = row
     return Episode(tenant, person, agent, question, note, list(node_ids or []), kind, intent, list(tools or []),
-                   outcome, conv, feedback, id_, at)
+                   outcome, conv, feedback, audience or "person", id_, at)
 
 
 def _task(row) -> Task:
@@ -248,9 +258,10 @@ class PostgresMemoryStore:
     def __init__(self, connect):
         self._connect = connect
 
-    def _run(self, sql: str, params=(), *, fetch: str | None = None):
+    def _run(self, sql: str, params=(), *, fetch: str | None = None, tenant: str | None = None):
         conn = self._connect()
         try:
+            use_tenant(conn, tenant)
             with conn.cursor() as cur:
                 cur.execute(sql, params)
                 out = cur.fetchone() if fetch == "one" else cur.fetchall() if fetch == "all" else None
@@ -262,11 +273,13 @@ class PostgresMemoryStore:
     def add_episode(self, episode: Episode) -> str:
         self._run(
             "INSERT INTO episodes (id, tenant_id, person_id, agent, question, note, node_ids, kind, intent, tools,"
-            " outcome, conversation_id, feedback)"
-            " VALUES (%s,%s,%s,%s,%s,%s,%s::text[],%s,%s,%s::jsonb,%s,%s,%s::jsonb)",
+            " outcome, conversation_id, feedback, audience)"
+            " VALUES (%s,%s,%s,%s,%s,%s,%s::text[],%s,%s,%s::jsonb,%s,%s,%s::jsonb,%s)",
             (episode.id, episode.tenant, episode.person_id, episode.agent, episode.question, episode.note,
              list(episode.node_ids), episode.kind, episode.intent, _json(episode.tools), episode.outcome,
-             episode.conversation_id, _json(episode.feedback) if episode.feedback is not None else None),
+             episode.conversation_id, _json(episode.feedback) if episode.feedback is not None else None,
+             episode.audience),
+            tenant=episode.tenant,
         )
         return episode.id
 
@@ -279,28 +292,35 @@ class PostgresMemoryStore:
         if not words:
             rows = self._run(
                 f"SELECT {_EPISODE_COLS} FROM episodes WHERE tenant_id=%s AND person_id=%s AND agent=%s"
-                " ORDER BY created_at DESC LIMIT %s",
-                (tenant, person_id, agent, limit), fetch="all",
+                " AND audience = 'person' ORDER BY created_at DESC LIMIT %s",
+                (tenant, person_id, agent, limit), fetch="all", tenant=tenant,
             )
         else:
             rows = self._run(
                 f"SELECT {_EPISODE_COLS} FROM episodes, to_tsquery('english', %s) q"
-                " WHERE tenant_id=%s AND person_id=%s AND agent=%s AND tsv @@ q"
+                " WHERE tenant_id=%s AND person_id=%s AND agent=%s AND audience = 'person' AND tsv @@ q"
                 " ORDER BY ts_rank(tsv, q) DESC, created_at DESC LIMIT %s",
-                (" | ".join(words), tenant, person_id, agent, limit), fetch="all",
+                (" | ".join(words), tenant, person_id, agent, limit), fetch="all", tenant=tenant,
             )
         return [_episode(r) for r in rows]
 
     def set_feedback(self, episode_id, feedback):
         self._run("UPDATE episodes SET feedback = %s::jsonb WHERE id = %s", (_json(feedback), episode_id))
 
-    def create_conversation(self, tenant, person_id, surface, title):
-        conv_id = new_id("conv")
-        self._run(
-            "INSERT INTO conversations (id, tenant_id, person_id, surface, title) VALUES (%s,%s,%s,%s,%s)",
+    def create_conversation(self, tenant, person_id, surface, title, conversation_id=None):
+        conv_id = conversation_id or new_id("conv")
+        row = self._run(
+            "INSERT INTO conversations (id, tenant_id, person_id, surface, title) VALUES (%s,%s,%s,%s,%s)"
+            " ON CONFLICT (id) DO NOTHING RETURNING id",
             (conv_id, tenant, person_id, surface, title[:200]),
+            fetch="one", tenant=tenant,
         )
-        return conv_id
+        if row:
+            return row[0]
+        existing = self.get_conversation(conv_id)
+        if existing and (existing.tenant, existing.person_id) == (tenant, person_id):
+            return conv_id
+        raise ConversationNotFound(conv_id)
 
     def get_conversation(self, conversation_id):
         row = self._run(
@@ -311,8 +331,9 @@ class PostgresMemoryStore:
 
     def add_turn(self, conversation_id, role, text, node_ids):
         self._run(
-            "INSERT INTO conversation_turns (conversation_id, role, text, node_ids) VALUES (%s,%s,%s,%s::text[])",
-            (conversation_id, role, text, list(node_ids)),
+            "INSERT INTO conversation_turns (conversation_id, role, text, node_ids, tenant_id)"
+            " VALUES (%s, %s, %s, %s::text[], (SELECT tenant_id FROM conversations WHERE id = %s))",
+            (conversation_id, role, text, list(node_ids), conversation_id),
         )
 
     def turns(self, conversation_id, limit):
@@ -327,7 +348,7 @@ class PostgresMemoryStore:
         row = self._run(
             "SELECT steps FROM playbooks WHERE (tenant_id = %s OR tenant_id IS NULL) AND role = %s AND intent = %s"
             " AND active ORDER BY (tenant_id IS NULL), version DESC LIMIT 1",
-            (tenant, role, intent), fetch="one",
+            (tenant, role, intent), fetch="one", tenant=tenant,
         )
         return list(row[0]) if row else None
 
@@ -336,7 +357,8 @@ class PostgresMemoryStore:
             "INSERT INTO playbooks (tenant_id, role, intent, version, steps, approved_by)"
             " SELECT %s, %s, %s, coalesce(max(version), 0) + 1, %s::jsonb, %s FROM playbooks"
             " WHERE coalesce(tenant_id, '') = coalesce(%s, '') AND role = %s AND intent = %s RETURNING version",
-            (tenant, role, intent, _json(list(steps)), approved_by, tenant, role, intent), fetch="one",
+            (tenant, role, intent, _json(list(steps)), approved_by, tenant, role, intent),
+            fetch="one", tenant=tenant,
         )
         return row[0]
 
@@ -347,7 +369,7 @@ class PostgresMemoryStore:
             + (" ON CONFLICT (id) DO NOTHING" if if_absent else "") + " RETURNING id",
             (task.id, task.tenant, task.kind, task.state, task.target_agent, list(task.node_ids),
              _json(task.payload), task.created_by, task.episode_id, task.parent_id),
-            fetch="one",
+            fetch="one", tenant=task.tenant,
         )
         return row[0] if row else None
 
@@ -367,6 +389,6 @@ class PostgresMemoryStore:
             f" WHERE id = (SELECT id FROM tasks WHERE tenant_id = %s AND kind = %s AND target_agent = %s"
             f" AND state = 'ready' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)"
             f" RETURNING {_TASK_COLS}",
-            (worker, tenant, kind, agent), fetch="one",
+            (worker, tenant, kind, agent), fetch="one", tenant=tenant,
         )
         return _task(row) if row else None

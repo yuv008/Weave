@@ -1,15 +1,18 @@
 """The agent server: the registry's tools over MCP (Streamable HTTP), plus the answer API, with bearer-token auth.
 
-Every HTTP request resolves its own principal from ``Authorization: Bearer``.
-Requests under the MCP path use the MCP surface; ``/answer`` and
-``/actions/...`` use the web surface. Both are private surfaces, so the caller
-is the token's owner. The server runs stateless, so a session can never carry
-an earlier caller's identity. The tenant, and therefore the graph, always
-comes from the token.
+Every HTTP request except ``GET /ops`` resolves its own principal from
+``Authorization: Bearer``. Requests under the MCP path use the MCP surface;
+``/answer``, ``/actions/...`` and ``/wisp/cue`` use the web surface. These are private surfaces,
+so the caller is the token's owner. The server runs stateless, so a session can
+never carry an earlier caller's identity. The tenant, and therefore the graph,
+always comes from the token. ``GET /ops`` is outside that auth: it checks
+``OPS_TOKEN`` and reports numbers for ``WEAVE_TENANT`` only.
 """
 
+import hashlib
 import json
 import logging
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -28,6 +31,7 @@ from agents.gate.principal import Principal, Surface
 from agents.gate.resolve import NotAuthorized, PersonInfo
 from agents.gate.stores import GraphDirectory
 from agents.graph import ReadOnlyGraph
+from agents.mcp.ops import OpsFront
 from agents.mcp.schema import tool_definition
 from agents.runtime import Runtime
 from agents.tools import REGISTRY, ToolInputError
@@ -45,6 +49,7 @@ INSTRUCTIONS = (
 )
 
 MAX_QUESTION_CHARS = 2000
+MAX_CUE_CHARS = 1500
 
 
 @dataclass(frozen=True)
@@ -87,13 +92,35 @@ async def _plain(send: Send, status: int, body: bytes, headers: list[tuple[bytes
     await send({"type": "http.response.body", "body": body})
 
 
+_CUE_CACHE_TTL = 45.0
+
+
 class BearerAuth:
-    """ASGI middleware: no valid token, no access. The 401 body never says why."""
+    """ASGI middleware: no valid token, no access. The 401 body never says why.
+
+    ``POST /wisp/cue`` reuses a principal for a short time so a draft can be
+    checked more than once while someone is still typing. Other routes resolve
+    every request.
+    """
 
     def __init__(self, app: ASGIApp, resolve: Callable[[str, Surface], Principal], mcp_path: str = "/mcp"):
         self._app = app
         self._resolve = resolve
         self._mcp_path = mcp_path
+        self._cue_cache: dict[str, tuple[float, Principal]] = {}
+        self._cue_lock = threading.Lock()
+
+    def _cue_hit(self, token: str) -> tuple[Principal | None, str]:
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        now = time.monotonic()
+        with self._cue_lock:
+            hit = self._cue_cache.get(digest)
+            if hit is not None and now - hit[0] < _CUE_CACHE_TTL:
+                return hit[1], digest
+            stale = [key for key, (at, _) in self._cue_cache.items() if now - at >= _CUE_CACHE_TTL]
+            for key in stale:
+                del self._cue_cache[key]
+        return None, digest
 
     def surface(self, path: str) -> Surface:
         return Surface.MCP if path == self._mcp_path or path.startswith(self._mcp_path + "/") else Surface.WEB
@@ -106,11 +133,22 @@ class BearerAuth:
             await _plain(send, 200, b"ok")
             return
         token = _bearer(scope)
-        surface = self.surface(scope.get("path", ""))
+        path = scope.get("path", "")
+        surface = self.surface(path)
+        cue_digest = None
         try:
             if token is None:
                 raise NotAuthorized()
-            principal = await anyio.to_thread.run_sync(self._resolve, token, surface)
+            cached = None
+            if path == "/wisp/cue":
+                cached, cue_digest = self._cue_hit(token)
+            if cached is not None:
+                principal = cached
+            else:
+                principal = await anyio.to_thread.run_sync(self._resolve, token, surface)
+                if cue_digest is not None:
+                    with self._cue_lock:
+                        self._cue_cache[cue_digest] = (time.monotonic(), principal)
         except NotAuthorized:
             await _plain(send, 401, b"not authorized", [(b"www-authenticate", b"Bearer")])
             return
@@ -249,13 +287,41 @@ def answer_routes(runtime: Runtime, agent) -> list[Route]:
     ]
 
 
+def cue_routes(runtime: Runtime) -> list[Route]:
+    """``POST /wisp/cue`` (web surface). The prompt is search input only."""
+
+    from agents.wisp.cue import cue
+
+    async def wisp_cue(request: Request):
+        caller = _CALLER.get()
+        if caller is None:
+            return PlainTextResponse("not authorized", status_code=401)
+        body = await _json_body(request)
+        prompt = (body or {}).get("prompt")
+        text = prompt.strip() if isinstance(prompt, str) else ""
+        if not text or len(text) > MAX_CUE_CHARS:
+            return PlainTextResponse(f"prompt must be 1-{MAX_CUE_CHARS} characters", status_code=400)
+        try:
+            payload = await anyio.to_thread.run_sync(
+                lambda: cue(runtime.context(caller.principal, agent="answer"), text)
+            )
+        except Exception as exc:
+            log.error("cue failed (request %s): %s", caller.request_id, type(exc).__name__)
+            return PlainTextResponse(f"internal error (request {caller.request_id})", status_code=500)
+        return JSONResponse(payload)
+
+    return [Route("/wisp/cue", wisp_cue, methods=["POST"])]
+
+
 def build_app(runtime: Runtime, *, agent=None, host: str = "127.0.0.1", path: str = "/mcp") -> ASGIApp:
     if runtime.resolver is None:
         raise ValueError("the server needs a resolver")
     server = build_server(runtime)
     routes = answer_routes(runtime, agent) if agent is not None else []
+    routes = [*routes, *cue_routes(runtime)]
     inner = server.streamable_http_app(
         streamable_http_path=path, json_response=True, stateless_http=True, host=host,
         custom_starlette_routes=routes,
     )
-    return BearerAuth(inner, runtime.resolver.for_token, mcp_path=path)
+    protected = BearerAuth(inner, runtime.resolver.for_token, mcp_path=path)
+    return OpsFront(protected)

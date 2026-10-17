@@ -90,10 +90,14 @@ class Resolver:
     def for_person(self, tenant: str, person_id: str, surface: Surface) -> Principal:
         if surface not in PRIVATE_SURFACES:
             raise ValueError("a person principal is only for private surfaces")
-        info = self._directory.person(tenant, person_id)
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(self._store.snapshot, tenant)
+            info = self._directory.person(tenant, person_id)
+            acl = pending.result()
         if info is None:
             raise NotAuthorized()
-        acl = self._store.snapshot(tenant)
         groups = person_groups(person_id, info.level, acl.memberships, info.subordinates)
         fresh = self._fresh(acl)
         return Principal(

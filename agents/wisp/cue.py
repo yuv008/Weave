@@ -9,8 +9,10 @@ loop or a model, and it does not write episodes, conversation turns, or logs.
 import threading
 
 from agents.gate.visible import chunk_visible_sql, gate_params
-from agents.memory.recall import recall
+from agents.memory.recall import namespace, recall
+from agents.memory.store import Episode, terms
 from agents.tools.base import ToolContext
+from agents.tools.common import visible_node_ids
 from agents.tools.search import search_context
 from shared.acl import SYSTEMS
 
@@ -157,8 +159,34 @@ def _chunk_row(ctx: ToolContext, prompt: str):
     return rows[0] if rows else None
 
 
+_EPISODES = """
+SELECT id, note, node_ids
+FROM episodes, to_tsquery('english', %(query)s) AS q
+WHERE tenant_id = %(tenant)s
+  AND person_id = %(person)s
+  AND agent = %(agent)s
+  AND audience = 'person'
+  AND tsv @@ q
+ORDER BY ts_rank(tsv, q) DESC, created_at DESC
+LIMIT 5
+"""
+
+_RECENT_EPISODES = """
+SELECT id, note, node_ids
+FROM episodes
+WHERE tenant_id = %(tenant)s
+  AND person_id = %(person)s
+  AND agent = %(agent)s
+  AND audience = 'person'
+ORDER BY created_at DESC
+LIMIT 5
+"""
+
+
 def _personal_hit(ctx: ToolContext, prompt: str) -> dict[str, str] | None:
-    for episode in recall(ctx, prompt, _RECALL_LIMIT):
+    loaded = _fast_episodes(ctx, prompt)
+    episodes = recall(ctx, prompt, _RECALL_LIMIT) if loaded is None else loaded
+    for episode in episodes:
         if episode.audience != "person" or not episode.id:
             continue
         quote = excerpt(episode.note)
@@ -166,3 +194,44 @@ def _personal_hit(ctx: ToolContext, prompt: str) -> dict[str, str] | None:
             continue
         return _found("This came up in a personal note", quote, PERSONAL_SOURCE, episode.id)
     return None
+
+
+def _kept(connect):
+    """The cue's open autocommit connection, if this caller already has one."""
+
+    with _DB_LOCK:
+        cached = _DB.get(id(connect))
+    if cached is not None and not getattr(cached, "closed", True):
+        return cached
+    return None
+
+
+def _fast_episodes(ctx: ToolContext, prompt: str) -> list[Episode] | None:
+    """Personal notes on the connection the company lookup already opened.
+
+    Opening a second connection, then switching role, is several round trips.
+    Offline stores have no kept connection and use ``recall`` instead.
+    """
+
+    if ctx.pg_connect is None:
+        return None
+    conn = _kept(ctx.pg_connect)
+    ns = namespace(ctx)
+    if conn is None or ns is None:
+        return None
+    words = terms(prompt)
+    params = {"tenant": ns.tenant, "person": ns.person_id, "agent": ns.agent, "query": " | ".join(words)}
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_EPISODES if words else _RECENT_EPISODES, params)
+            rows = cur.fetchall()
+    except Exception:
+        _drop(ctx.pg_connect)
+        return []
+    found = [
+        Episode(ns.tenant, ns.person_id, ns.agent, note=note or "", node_ids=list(node_ids or []), id=episode_id)
+        for episode_id, note, node_ids in rows
+        if episode_id
+    ]
+    visible = visible_node_ids(ctx, [node for episode in found for node in episode.node_ids])
+    return [episode for episode in found if all(node in visible for node in episode.node_ids)]

@@ -1,5 +1,6 @@
 """What the agent surfaces share: graph access, config, stores, and how a tool context is built."""
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -50,6 +51,7 @@ def live_runtime() -> Runtime:
     from agents.mcp.server import TenantDirectory
     from shared.config import load_config
     from shared.env import load_env
+    from agents.wisp.cue import _reuse
     from shared.graphdb import connect
     from shared.pg import connect_pg
 
@@ -60,8 +62,16 @@ def live_runtime() -> Runtime:
     def open_graph(tenant: str) -> ReadOnlyGraph:
         return open_company(tenant, db)
 
-    resolver = Resolver(PostgresGateStore(connect_pg), TenantDirectory(open_graph), stale_minutes=cfg.acl_stale_minutes)
+    gate = PostgresGateStore(connect_pg)
+    resolver = Resolver(gate, TenantDirectory(open_graph), stale_minutes=cfg.acl_stale_minutes)
+    memory = PostgresMemoryStore(connect_pg)
+    try:
+        gate.warm()
+        memory.warm()
+        _reuse(connect_pg)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("cue connections were not warmed (%s)", type(exc).__name__)
     return Runtime(
         open_graph, cfg, resolver=resolver, pg_connect=connect_pg,
-        audit=PostgresAudit(connect_pg), memory=PostgresMemoryStore(connect_pg),
+        audit=PostgresAudit(connect_pg), memory=memory,
     )

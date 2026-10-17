@@ -163,6 +163,31 @@ def test_use_tenant_without_a_tenant_leaves_the_owner():
     assert "tenant" not in connect_pg.__code__.co_varnames
 
 
+def test_postgres_memory_reuses_one_open_connection():
+    class Live(RecConn):
+        def __init__(self):
+            super().__init__()
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+            super().close()
+
+    opened = []
+
+    def connect():
+        conn = Live()
+        opened.append(conn)
+        return conn
+
+    store = PostgresMemoryStore(connect)
+    assert store.get_episode("ep1") is None
+    assert store.get_episode("ep2") is None
+    assert len(opened) == 1
+    assert opened[0].closed is False
+    assert _sqls(opened[0]).count("CLOSE") == 0
+
+
 def test_stores_pass_the_tenant_they_already_have():
     memory = RecConn()
     store = PostgresMemoryStore(lambda: memory)

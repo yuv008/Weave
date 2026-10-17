@@ -17,6 +17,7 @@ import json
 import math
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -32,10 +33,25 @@ from pathlib import Path
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
-user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
-user32.SetProcessDpiAwarenessContext.restype = wintypes.BOOL
-if not user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
-    user32.SetProcessDPIAware()
+def _per_monitor_dpi():
+    """Real pixels on each screen. One system-wide scale makes the other screen look zoomed."""
+
+    try:
+        user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+        user32.SetProcessDpiAwarenessContext.restype = wintypes.BOOL
+        if user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return
+    except Exception:
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        pass
+
+
+_per_monitor_dpi()
+user32.GetDpiForWindow.argtypes = [wintypes.HWND]
+user32.GetDpiForWindow.restype = wintypes.UINT
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
@@ -49,7 +65,7 @@ OPEN_WIDTH = 560
 OPEN_HEIGHT = 280
 IGNORE_FOR = 10 * 60
 SUGGEST_BODY_MAX = 65536
-ALERT_FOR = 1.25
+ALERT_FOR = 0.35
 
 
 def _notice_wav():
@@ -254,8 +270,40 @@ card_click = {"hwnd": 0}
 draft_watch = None
 
 
+_STOP_WORDS = frozenset({
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "are", "was", "be", "it", "we",
+    "i", "me", "my", "our", "what", "which", "who", "why", "how", "do", "does", "did", "should", "with",
+    "about", "this", "that", "from", "at", "by", "as", "us", "you", "your", "can", "will", "would",
+    "have", "has", "had", "not", "but", "if", "so", "just", "into", "also",
+})
+
+
+def _content_words(text):
+    seen = []
+    for word in re.findall(r"[a-z0-9]+", (text or "").lower()):
+        if len(word) < 4 or word in _STOP_WORDS or word in seen:
+            continue
+        seen.append(word)
+    return seen
+
+
+def _related(draft, quote):
+    """The draft is about this note when most of its words are in the quote."""
+
+    draft_words = _content_words(draft)
+    quote_words = set(_content_words(quote))
+    if len(draft_words) < 2 or len(quote_words) < 2:
+        return False
+    shared = [word for word in draft_words if word in quote_words]
+    return len(shared) >= 2 and len(shared) * 2 >= len(draft_words)
+
+
+def _accepting():
+    return pet_ref is not None and pet_ref.accept_latched
+
+
 def offer_suggestion(data):
-    """Show a found cue on the pet. Returns whether a card was queued."""
+    """Show a found cue on the pet. A card already open swaps to the new match."""
     if not isinstance(data, dict) or data.get("state") != "found":
         return False
     item_id = _plain(data.get("item_id"))
@@ -268,12 +316,33 @@ def offer_suggestion(data):
         "item_id": item_id,
     }
     with suggest_state.lock:
+        if _accepting():
+            return False
+        same = (
+            item_id
+            and item_id == suggest_state.item_id
+            and payload["quote"] == suggest_state.quote
+            and payload["summary"] == suggest_state.summary
+            and (suggest_state.open or suggest_state.pending)
+        )
+        if same:
+            return True
         suggest_state.seq += 1
         payload["seq"] = suggest_state.seq
         suggest_state.pending = True
         suggest_state.turn_ended = False
     ui_queue.put(("show", payload))
     return True
+
+
+def retire_suggestion():
+    """Close the card when the draft no longer matches a stored note."""
+    with suggest_state.lock:
+        if _accepting() or not (suggest_state.open or suggest_state.pending):
+            return
+        suggest_state.seq += 1
+        suggest_state.pending = False
+    ui_queue.put(("hide", None))
 
 
 def _plain(value):
@@ -513,6 +582,39 @@ def own_the_process():
         sys.exit(0)
 
 
+def monitor_scale(x, y):
+    """CSS pixels to physical pixels for the screen under this point. 1.0 at 96 DPI."""
+
+    try:
+        shcore = ctypes.windll.shcore
+        shcore.GetDpiForMonitor.argtypes = [
+            wintypes.HMONITOR, ctypes.c_int, ctypes.POINTER(wintypes.UINT), ctypes.POINTER(wintypes.UINT),
+        ]
+        shcore.GetDpiForMonitor.restype = ctypes.c_long
+        user32.MonitorFromPoint.argtypes = [POINT, wintypes.DWORD]
+        user32.MonitorFromPoint.restype = wintypes.HMONITOR
+        monitor = user32.MonitorFromPoint(POINT(int(x), int(y)), 2)
+        dx, dy = wintypes.UINT(), wintypes.UINT()
+        if monitor and shcore.GetDpiForMonitor(monitor, 0, ctypes.byref(dx), ctypes.byref(dy)) == 0 and dx.value:
+            return dx.value / 96.0
+    except Exception:
+        pass
+    return 1.0
+
+
+def window_scale(hwnd=None):
+    hwnd = hwnd or Pet.hwnd
+    if hwnd:
+        dpi = user32.GetDpiForWindow(hwnd)
+        if dpi:
+            return dpi / 96.0
+    return 1.0
+
+
+def css_px(css, scale):
+    return max(1, int(round(css * scale)))
+
+
 def work_area(x, y):
     monitor = user32.MonitorFromPoint(POINT(int(x), int(y)), 2)
     info = MONITORINFO()
@@ -523,10 +625,17 @@ def work_area(x, y):
     return rect.left, rect.top, rect.right, rect.bottom
 
 
-def clamp(x, y):
-    left, top, right, bottom = work_area(x + WIDTH / 2, y + HEIGHT / 2)
-    x = min(max(x, left + 8), right - WIDTH - 8)
-    y = min(max(y, top + 8), bottom - HEIGHT - 8)
+def clamp(x, y, scale=None):
+    if scale is None:
+        scale = window_scale()
+    w, h = css_px(WIDTH, scale), css_px(HEIGHT, scale)
+    extra = 0
+    if pet_ref is not None and pet_ref.card_open:
+        extra = css_px(OPEN_WIDTH - WIDTH, scale)
+        h = css_px(OPEN_HEIGHT, scale)
+    left, top, right, bottom = work_area(x + w / 2, y + h / 2)
+    x = min(max(x, left + extra + 8), right - w - 8)
+    y = min(max(y, top + 8), bottom - h - 8)
     return x, y
 
 
@@ -762,9 +871,10 @@ class Pet:
         self.win_size = None
 
     def place_near(self, caret_x, caret_y, caret_h):
+        scale = monitor_scale(caret_x, caret_y)
         x = caret_x - 20
-        y = caret_y - HEIGHT - 4
-        return clamp(x, y)
+        y = caret_y - css_px(HEIGHT, scale) - 4
+        return clamp(x, y, scale)
 
     def begin_jump(self, x, y):
         self.mode = "jump"
@@ -792,7 +902,8 @@ class Pet:
         self.jump_started = 0.0
 
     def recall(self, screen_x, screen_y):
-        self.x, self.y = clamp(screen_x - 24, screen_y - HEIGHT - 12)
+        scale = monitor_scale(screen_x, screen_y)
+        self.x, self.y = clamp(screen_x - 24, screen_y - css_px(HEIGHT, scale) - 12, scale)
         self.tx, self.ty = self.x, self.y
         self.pinned = False
         self.manual = False
@@ -949,11 +1060,15 @@ class Pet:
                 return
             nx = int(self.x)
             ny = int(self.y)
-            tw, th = WIDTH, HEIGHT
+            scale = window_scale(hwnd)
+            tw, th = css_px(WIDTH, scale), css_px(HEIGHT, scale)
             if self.card_open:
                 # The pet slot stays at (self.x, self.y). The extra width hangs to its left.
-                nx -= OPEN_WIDTH - WIDTH
-                tw, th = OPEN_WIDTH, OPEN_HEIGHT
+                nx -= css_px(OPEN_WIDTH - WIDTH, scale)
+                tw, th = css_px(OPEN_WIDTH, scale), css_px(OPEN_HEIGHT, scale)
+            if getattr(self, "_scale_logged", None) != scale:
+                self._scale_logged = scale
+                log(f"dpi {scale:.2f} {tw}x{th}")
             w = rect.right - rect.left
             h = rect.bottom - rect.top
             style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
@@ -1059,7 +1174,8 @@ def _on_pet_body(x, y):
     if pet_ref is not None and pet_ref.card_open:
         left = int(pet_ref.x)
         top = int(pet_ref.y)
-        return left <= x < left + WIDTH and top <= y < top + HEIGHT
+        scale = window_scale()
+        return left <= x < left + css_px(WIDTH, scale) and top <= y < top + css_px(HEIGHT, scale)
     return _over_pet(x, y)
 
 
@@ -1263,9 +1379,10 @@ def run_form():
     form.TopMost = True
     form.StartPosition = WinForms.FormStartPosition.Manual
     form.AutoScaleMode = getattr(WinForms.AutoScaleMode, "None")
-    form.ClientSize = Size(WIDTH, HEIGHT)
     point = POINT()
     user32.GetCursorPos(ctypes.byref(point))
+    scale = monitor_scale(point.x, point.y)
+    form.ClientSize = Size(css_px(WIDTH, scale), css_px(HEIGHT, scale))
     spot = Pet(None).place_near(point.x, point.y, 20)
     form.Location = Point(int(spot[0]), int(spot[1]))
     hwnd = wintypes.HWND(int(form.Handle.ToInt64()))
@@ -1351,9 +1468,13 @@ def run_form():
         with suggest_state.lock:
             if payload.get("seq") != suggest_state.seq:
                 return
+            if pet.accept_latched:
+                suggest_state.pending = False
+                return
             if suggest_state.prune_blocked(payload.get("item_id") or "", time.time()):
                 suggest_state.pending = False
                 return
+            already = suggest_state.open
             suggest_state.pending = False
             suggest_state.open = True
             suggest_state.summary = payload.get("summary") or ""
@@ -1364,6 +1485,13 @@ def run_form():
             quote = suggest_state.quote
             source = suggest_state.source
             item_id = suggest_state.item_id
+        if already and pet.card_open:
+            message = json.dumps(
+                {"summary": summary, "quote": quote, "source": source, "item_id": item_id}
+            )
+            view.CoreWebView2.ExecuteScriptAsync("weaveSuggestReplace(" + message + ")")
+            log("card update")
+            return
         pet.card_open = False
         pet.reveal_at = time.time() + ALERT_FOR
         pet.close_at = 0.0
@@ -1371,7 +1499,8 @@ def run_form():
         set_click_through(True)
         pet.apply()
         push_suggestion(summary, quote, source, item_id)
-        play_notice()
+        if not already:
+            play_notice()
         log("card alert")
 
     def reveal_card():
@@ -1409,6 +1538,10 @@ def run_form():
                 kind, payload = ui_queue.get_nowait()
             except queue.Empty:
                 return
+            if kind == "hide":
+                if not pet.accept_latched:
+                    close_card()
+                continue
             if kind == "show":
                 try:
                     open_card(payload)
@@ -1718,23 +1851,32 @@ class DraftWatch:
                 time.sleep(0.1)
                 continue
             cleaned = text.replace("\ufeff", "").strip()
-            if len(cleaned) < 12 or len(cleaned) > 1500 or cleaned == last_cued:
-                time.sleep(0.5)
+            if len(cleaned) < 12 or len(cleaned) > 1500:
+                if len(cleaned) < 12:
+                    retire_suggestion()
+                time.sleep(0.3)
                 continue
-            with suggest_state.lock:
-                busy = suggest_state.open or suggest_state.pending
-            if busy:
-                time.sleep(0.4)
+            if cleaned == last_cued:
+                time.sleep(0.3)
                 continue
             last_cued = cleaned
             started = time.perf_counter()
             quick = self.fast_cue(cleaned)
             elapsed = int((time.perf_counter() - started) * 1000)
+            current = self.read()
+            if current is None or " ".join(current.replace("\ufeff", "").split()) != " ".join(cleaned.split()):
+                last_cued = None
+                continue
             if quick is None:
                 log(f"draft down {elapsed}")
                 continue
-            log(f"draft shown {elapsed}" if offer_suggestion(quick) else f"draft unsure {elapsed}")
-            time.sleep(0.2)
+            related = quick.get("state") == "found" and _related(cleaned, quick.get("quote"))
+            if related and offer_suggestion(quick):
+                log(f"draft shown {elapsed}")
+            else:
+                retire_suggestion()
+                log(f"draft unsure {elapsed}")
+            time.sleep(0.1)
 
 
 def main():

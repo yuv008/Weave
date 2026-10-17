@@ -823,6 +823,22 @@
     applyPetState();
     reportInk();
   }
+  function weaveSuggestReplace(payload) {
+    payload = payload || {};
+    suggestion = {
+      summary: payload.summary || "",
+      quote: payload.quote || "",
+      source: payload.source || "",
+      item_id: payload.item_id || "",
+      pending: false,
+    };
+    fillSuggestion();
+    cardOpen = true;
+    const card = document.getElementById("suggest");
+    if (card) card.hidden = false;
+    applyPetState();
+    reportInk();
+  }
   function weaveSuggestReveal() {
     if (!suggestion) return;
     cardOpen = true;
@@ -921,6 +937,7 @@
   window.weavePoke = weavePoke;
   window.reportInk = reportInk;
   window.weaveSuggest = weaveSuggest;
+  window.weaveSuggestReplace = weaveSuggestReplace;
   window.weaveSuggestReveal = weaveSuggestReveal;
   window.weaveSuggestStatus = weaveSuggestStatus;
   window.weaveSuggestClose = weaveSuggestClose;

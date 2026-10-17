@@ -254,21 +254,68 @@ def _task(row) -> Task:
                 id_, at, claimed_at, claimed_by)
 
 
+def _is_closed(conn) -> bool:
+    """True when ``conn`` cannot be reused. Connections without ``closed`` are one-shot."""
+
+    flag = getattr(conn, "closed", None)
+    if flag is None:
+        return True
+    return bool(flag)
+
+
 class PostgresMemoryStore:
     def __init__(self, connect):
         self._connect = connect
+        self._lock = threading.Lock()
+        self._conn = None
+
+    def warm(self) -> None:
+        """Open the kept connection. The first cue then does not wait on a new one."""
+
+        self._run("SELECT 1")
+
+    def _borrow(self):
+        conn = self._conn
+        if conn is not None and not _is_closed(conn):
+            return conn, True
+        conn = self._connect()
+        keep = not _is_closed(conn)
+        if keep:
+            self._conn = conn
+        return conn, keep
+
+    def _drop(self, conn) -> None:
+        if self._conn is conn:
+            self._conn = None
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     def _run(self, sql: str, params=(), *, fetch: str | None = None, tenant: str | None = None):
-        conn = self._connect()
-        try:
-            use_tenant(conn, tenant)
-            with conn.cursor() as cur:
-                cur.execute(sql, params)
-                out = cur.fetchone() if fetch == "one" else cur.fetchall() if fetch == "all" else None
-            conn.commit()
-            return out
-        finally:
-            conn.close()
+        with self._lock:
+            conn, keep = self._borrow()
+            try:
+                use_tenant(conn, tenant)
+                with conn.cursor() as cur:
+                    cur.execute(sql, params)
+                    out = cur.fetchone() if fetch == "one" else cur.fetchall() if fetch == "all" else None
+                conn.commit()
+                return out
+            except Exception:
+                self._drop(conn)
+                keep = False
+                raise
+            finally:
+                if not keep:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
     def add_episode(self, episode: Episode) -> str:
         self._run(

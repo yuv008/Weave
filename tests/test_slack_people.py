@@ -16,7 +16,7 @@ def test_viewer_email_takes_the_authored_edges(graph, monkeypatch):
     graph.query(
         """
         CREATE (p:Person {id: 't:slack:person:T:U1', tenant_id: 't', slack_id: 'U1'})
-        CREATE (m:Message {id: 'm1', tenant_id: 't'})
+        CREATE (m:Message:Item {id: 'm1', tenant_id: 't', source: 'slack', author_external_id: 'U1', workspace_id: 'T'})
         CREATE (p)-[:AUTHORED]->(m)
         CREATE (m)-[:AUTHORED_BY]->(p)
         CREATE (q:Person {id: 't:slack:person:T:U2', tenant_id: 't', slack_id: 'U2'})
@@ -37,5 +37,4 @@ def test_viewer_email_takes_the_authored_edges(graph, monkeypatch):
         "MATCH (m:Message {id: 'm1'})-[:AUTHORED_BY]->(p) RETURN p.id"
     ).result_set
     assert authors == [["t:person:viewer@example.com"]]
-    other = graph.query("MATCH (p:Person {id: 't:slack:person:T:U2'}) RETURN p.name, p.level").result_set
-    assert other == [["Ada", None]]
+    assert graph.query("MATCH (p:Person {id: 't:slack:person:T:U2'}) RETURN count(p)").result_set[0][0] == 1

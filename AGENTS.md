@@ -171,8 +171,11 @@ Provider B for SSO" with two citations).
 ### Open decisions (both builders)
 
 -   Whether `REPLIES_TO` stays in the contract.
--   Whether `AUTHORED` and `CONTAINS` are dropped once `AUTHORED_BY`
-    and `IN_SOURCE` are written.
+
+Ingestion no longer writes `AUTHORED` or `CONTAINS`. Connector
+`Person` nodes are keyed by email and stay `provisional` until level
+and department are known (`WEAVE_VIEWER_*` or an org chart).
+`AUTHORED_BY` is written only when the source supplies an email.
 
 ## 1. Product overview
 

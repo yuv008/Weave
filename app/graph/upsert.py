@@ -3,10 +3,9 @@
 Node ids:
 - Message: ``{tenant}:slack:message:{channel}:{ts}``
 - Conversation: ``{tenant}:slack:conversation:{team}:{channel}``
-- Person: ``{tenant}:slack:person:{team}:{user}``
-
 A message is ``:Message:Item``. A channel is ``:Conversation:Source``.
-``IN_SOURCE`` and ``AUTHORED_BY`` are added beside the existing edges.
+``IN_SOURCE`` is written on ingest; ``AUTHORED_BY`` is added after
+``users.info`` resolves an email in ``app/slack/people.py``.
 A channel missing from ``config/weave.yaml`` is not written.
 
 Retries replay the same version. An equal version does not change stored
@@ -18,6 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
+from app.graph.link_author import purge_legacy_item_edges
 from app.graph.policy import allowed_source, slack_source_id
 from app.models.canonical import CanonicalMessage, message_node_id
 from shared.schema import Label, Prop, Rel
@@ -55,7 +55,8 @@ SET
   m.ingested_at = CASE WHEN do_apply THEN $now ELSE m.ingested_at END,
   m.placeholder = CASE WHEN do_apply THEN false ELSE coalesce(m.placeholder, false) END,
   m.{Prop.ACL_GROUPS} = CASE WHEN do_apply THEN $acl_groups ELSE m.{Prop.ACL_GROUPS} END,
-  m.{Prop.MIN_LEVEL} = CASE WHEN do_apply THEN $min_level ELSE m.{Prop.MIN_LEVEL} END
+  m.{Prop.MIN_LEVEL} = CASE WHEN do_apply THEN $min_level ELSE m.{Prop.MIN_LEVEL} END,
+  m.author_external_id = CASE WHEN do_apply THEN $author_external_id ELSE m.author_external_id END
 RETURN do_apply
 """
 
@@ -75,22 +76,7 @@ SET
   c.{Prop.AUTHORITY} = $authority
 MERGE (t)-[:HAS_CONVERSATION]->(c)
 MERGE (m:{Label.MESSAGE} {{id: $msg_id}})
-MERGE (c)-[:CONTAINS]->(m)
 MERGE (m)-[:{Rel.IN_SOURCE}]->(c)
-"""
-
-_LINK_AUTHOR = f"""
-MERGE (p:{Label.PERSON} {{id: $person_id}})
-SET
-  p.{Prop.TENANT_ID} = $tenant_id,
-  p.{Prop.SOURCE} = 'slack',
-  p.connection_id = $connection_id,
-  p.workspace_id = $workspace_id,
-  p.{Prop.EXTERNAL_ID} = $author_ext,
-  p.{Prop.SLACK_ID} = $author_ext
-MERGE (m:{Label.MESSAGE} {{id: $msg_id}})
-MERGE (p)-[:AUTHORED]->(m)
-MERGE (m)-[:{Rel.AUTHORED_BY}]->(p)
 """
 
 _LINK_PARENT = f"""
@@ -173,15 +159,7 @@ def upsert_message(
         return UpsertResult(node_id=message.node_id, applied=False)
 
     graph.query(_LINK_CONVERSATION, params)
-    if message.person_node_id is not None:
-        graph.query(
-            _LINK_AUTHOR,
-            {
-                **params,
-                "person_id": message.person_node_id,
-                "author_ext": message.author_external_id,
-            },
-        )
+    purge_legacy_item_edges(graph, message.node_id)
     if message.thread_parent_external_id is not None:
         graph.query(
             _LINK_PARENT,
@@ -223,4 +201,5 @@ def _message_params(message: CanonicalMessage, ingested_at: datetime, group: str
         "source_name": policy.name,
         "cascade_policy": policy.cascade_policy,
         "authority": policy.authority,
+        "author_external_id": message.author_external_id or "",
     }

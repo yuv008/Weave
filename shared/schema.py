@@ -194,7 +194,7 @@ _CLAIM_COMMON = (
 )
 
 REQUIRED_PROPS: dict[str, tuple[str, ...]] = {
-    Label.PERSON: (Prop.NAME, Prop.EMAIL, Prop.LEVEL, Prop.DEPT),
+    Label.PERSON: (Prop.NAME, Prop.EMAIL),
     Label.TEAM: (Prop.NAME, Prop.KIND),
     Label.DEPARTMENT: (Prop.NAME, Prop.KIND),
     Label.TOPIC: (Prop.NAME, Prop.ALIASES),
@@ -248,7 +248,7 @@ EDGE_ENDPOINTS: dict[str, tuple[set[str], set[str]]] = {
     Rel.MEMBER_OF: ({Label.PERSON}, {Label.TEAM}),
     Rel.PART_OF: ({Label.TEAM}, {Label.DEPARTMENT}),
     Rel.REPORTS_TO: ({Label.PERSON}, {Label.PERSON}),
-    Rel.OWNS: ({Label.PERSON}, {Label.PROJECT, Label.COMMITMENT, Label.TOPIC, Label.DEAL}),
+    Rel.OWNS: ({Label.PERSON}, {Label.PROJECT, Label.COMMITMENT, Label.TOPIC, Label.DEAL, Label.CUSTOMER}),
     Rel.KNOWS_ABOUT: ({Label.PERSON}, {Label.TOPIC, Label.PROJECT}),
     Rel.ABOUT: ({Label.DECISION, Label.FIGURE}, {Label.TOPIC, Label.PROJECT, Label.DEAL}),
     Rel.MADE_BY: ({Label.DECISION}, {Label.PERSON}),

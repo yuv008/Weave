@@ -58,7 +58,7 @@ class DriveClient:
             query += f" and modifiedTime > '{modified_after}'"
         params = {
             "q": query,
-            "fields": "nextPageToken,files(id,mimeType,modifiedTime,trashed,name)",
+            "fields": "nextPageToken,files(id,mimeType,modifiedTime,trashed,name,owners(emailAddress,displayName))",
             "pageSize": "100",
             "supportsAllDrives": "true",
             "includeItemsFromAllDrives": "true",

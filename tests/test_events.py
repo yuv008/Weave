@@ -118,14 +118,14 @@ def test_delete_blanks_the_excerpt_and_keeps_contains(graph):
 
     assert response.status_code == 200
     assert _excerpt(graph) == ""
-    contains = graph.query(
+    in_source = graph.query(
         """
-        MATCH (:Conversation)-[edge:CONTAINS]->(:Message {id: $id})
+        MATCH (:Message {id: $id})-[edge:IN_SOURCE]->(:Conversation)
         RETURN count(edge)
         """,
         {"id": f"{TENANT}:slack:message:{CHANNEL}:10.1"},
     ).result_set
-    assert contains[0][0] == 1
+    assert in_source[0][0] == 1
 
 
 def test_older_edit_does_not_replace_a_newer_excerpt(graph):

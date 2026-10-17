@@ -224,10 +224,10 @@ def test_comment_before_issue_and_stale_write(graph):
     ).result_set[0]
     assert excerpt.startswith("Ship")
     assert placeholder is False
-    assert graph.query("MATCH ()-[r:CONTAINS]->() RETURN count(r)").result_set[0][0] == 1
-    graph.query("MATCH ()-[r:CONTAINS]->() DELETE r")
+    assert graph.query("MATCH ()-[r:REPLIES_TO]->() RETURN count(r)").result_set[0][0] == 1
+    graph.query("MATCH ()-[r:REPLIES_TO]->() DELETE r")
     upsert_document(graph, comment)
-    assert graph.query("MATCH ()-[r:CONTAINS]->() RETURN count(r)").result_set[0][0] == 1
+    assert graph.query("MATCH ()-[r:REPLIES_TO]->() RETURN count(r)").result_set[0][0] == 1
     older = normalize_github_comment(
         _comment(10, 4, "2026-03-11T01:00:00Z", "stale"),
         tenant_id="demo",
@@ -237,14 +237,14 @@ def test_comment_before_issue_and_stale_write(graph):
         repo="sso-service",
         issue_number=4,
     )
-    graph.query("MATCH ()-[r:CONTAINS]->() DELETE r")
+    graph.query("MATCH ()-[r:REPLIES_TO]->() DELETE r")
     upsert_document(graph, older)
     stored = graph.query(
         "MATCH (d:Document {id: $id}) RETURN d.excerpt",
         {"id": comment.node_id},
     ).result_set[0][0]
     assert stored == "because of the outage"
-    assert graph.query("MATCH ()-[r:CONTAINS]->() RETURN count(r)").result_set[0][0] == 0
+    assert graph.query("MATCH ()-[r:REPLIES_TO]->() RETURN count(r)").result_set[0][0] == 0
     deleted = normalize_github_issue(
         _issue(4, "2026-03-12T00:00:00Z"),
         tenant_id="demo",
@@ -258,7 +258,7 @@ def test_comment_before_issue_and_stale_write(graph):
     upsert_document(graph, deleted)
     assert graph.query("MATCH (d:Issue {id: $id}) RETURN d.excerpt", {"id": parent_id}).result_set[0][0] == ""
     assert graph.query("MATCH ()-[r:HAS_SOURCE]->() RETURN count(r)").result_set[0][0] >= 1
-    assert graph.query("MATCH ()-[r:CONTAINS]->() RETURN count(r)").result_set[0][0] == 1
+    assert graph.query("MATCH ()-[r:REPLIES_TO]->() RETURN count(r)").result_set[0][0] == 1
 
 
 class _Repo:
@@ -560,7 +560,7 @@ def test_delete_blanks_the_excerpt_and_keeps_contains(graph):
     assert response.status_code == 200
     excerpt = graph.query("MATCH (d:Issue {id: $id}) RETURN d.excerpt", {"id": issue.node_id}).result_set[0][0]
     assert excerpt == ""
-    assert graph.query("MATCH ()-[r:CONTAINS]->() RETURN count(r)").result_set[0][0] == 1
+    assert graph.query("MATCH ()-[r:REPLIES_TO]->() RETURN count(r)").result_set[0][0] == 1
 
 
 def test_older_github_edit_does_not_replace_a_newer_excerpt(graph):

@@ -47,16 +47,19 @@ def test_known_channel_adds_contract_labels_and_edges(graph):
         {"id": message.node_id},
     ).result_set
     assert labels
-    edges = graph.query(
+    row = graph.query(
         f"""
         MATCH (m:Message {{id: $id}})-[:{Rel.IN_SOURCE}]->(s:Source)
-        MATCH (m)-[:{Rel.AUTHORED_BY}]->(p:Person)
-        RETURN s.id, p.slack_id, p.email
+        RETURN s.id, m.author_external_id
         """,
         {"id": message.node_id},
     ).result_set[0]
-    assert edges[1] == "U1"
-    assert edges[2] is None
+    assert row[1] == "U1"
+    authored = graph.query(
+        f"MATCH (m:Message {{id: $id}})-[:{Rel.AUTHORED_BY}]->() RETURN count(*)",
+        {"id": message.node_id},
+    ).result_set[0][0]
+    assert authored == 0
 
 
 def test_github_issue_id_matches_the_shared_builder(graph):

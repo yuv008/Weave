@@ -20,9 +20,9 @@ from app.graph.policy import (
     hubspot_source_id,
     notion_source_id,
 )
+from app.graph.link_author import link_author, purge_legacy_item_edges
 from app.graph.upsert import UpsertResult
 from app.models.canonical_document import CanonicalDocument
-from shared.ids import person_id
 from shared.schema import Label, Prop, Rel
 from shared.timefmt import to_ts
 
@@ -62,6 +62,7 @@ SET
   d.kind = CASE WHEN do_apply THEN $kind ELSE d.kind END,
   d.status = CASE WHEN do_apply THEN $status ELSE d.status END,
   d.author_external_id = CASE WHEN do_apply THEN $author_external_id ELSE d.author_external_id END,
+  d.author_email = CASE WHEN do_apply THEN $author_email ELSE d.author_email END,
   d.parent_external_id = CASE WHEN do_apply THEN $parent_external_id ELSE d.parent_external_id END,
   d.placeholder = CASE WHEN do_apply THEN false ELSE coalesce(d.placeholder, false) END,
   d.{Prop.ACL_GROUPS} = CASE WHEN do_apply THEN $acl_groups ELSE d.{Prop.ACL_GROUPS} END,
@@ -114,7 +115,7 @@ ON CREATE SET
   parent.placeholder = true,
   parent.{Prop.VERSION} = ''
 MERGE (d:{item_label} {{id: $doc_id}})
-MERGE (parent)-[:CONTAINS]->(d)
+MERGE (d)-[:{Rel.REPLIES_TO}]->(parent)
 MERGE (parent)-[:{Rel.IN_SOURCE}]->(:{Label.SOURCE} {{id: $source_id}})
 """
 
@@ -134,6 +135,7 @@ def upsert_document(graph, document: CanonicalDocument, *, now: datetime | None 
         return UpsertResult(node_id=document.node_id, applied=False)
     labels = ":".join(SOURCE_LABELS[system])
     graph.query(_link(labels, item_label), params)
+    purge_legacy_item_edges(graph, document.node_id)
     if document.parent_node_id:
         parent_label = Label.ISSUE if document.source == "github" else Label.DOCUMENT
         graph.query(
@@ -146,22 +148,33 @@ def upsert_document(graph, document: CanonicalDocument, *, now: datetime | None 
                 "empty_hash": _EMPTY_HASH,
             },
         )
-    if document.source == "gcal" and document.author_external_id and "@" in document.author_external_id:
-        graph.query(
-            f"""
-MERGE (p:{Label.PERSON} {{id: $person_id}})
-SET p.{Prop.TENANT_ID} = $tenant_id, p.{Prop.EMAIL} = $email, p.{Prop.NAME} = $email
-MERGE (d:{item_label} {{id: $doc_id}})
-MERGE (d)-[:{Rel.AUTHORED_BY}]->(p)
-""",
-            {
-                "person_id": person_id(document.tenant_id, document.author_external_id),
-                "tenant_id": document.tenant_id,
-                "email": document.author_external_id,
-                "doc_id": document.node_id,
-            },
+        purge_legacy_item_edges(graph, document.node_id)
+    email = _author_email(document)
+    if email:
+        link_author(
+            graph,
+            tenant_id=document.tenant_id,
+            item_id=document.node_id,
+            email=email,
+            name=document.author_name or None,
+            github_login=document.author_external_id if document.source == "github" and "@" not in document.author_external_id else None,
+            notion_user=(
+                document.author_external_id
+                if document.source == "notion"
+                and document.author_external_id
+                and "@" not in document.author_external_id
+                else None
+            ),
         )
     return UpsertResult(node_id=document.node_id, applied=True)
+
+
+def _author_email(document: CanonicalDocument) -> str:
+    if document.author_email:
+        return document.author_email
+    if "@" in document.author_external_id:
+        return document.author_external_id
+    return ""
 
 
 def _allowed(document: CanonicalDocument):
@@ -232,6 +245,7 @@ def _params(document, ingested_at, system, group, policy, source_node) -> dict:
         "kind": document.kind,
         "status": document.status,
         "author_external_id": document.author_external_id,
+        "author_email": document.author_email,
         "parent_external_id": document.parent_external_id or "",
         "now": to_ts(ingested_at),
         "acl_groups": [group],

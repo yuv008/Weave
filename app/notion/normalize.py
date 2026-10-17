@@ -32,6 +32,7 @@ def normalize_notion_page(
     url = page.get("url")
     if not isinstance(url, str) or not url:
         url = f"https://www.notion.so/{page_id.replace('-', '')}"
+    author_id, author_email, author_name = _created_by(page)
     return CanonicalDocument(
         tenant_id=tenant_id,
         connection_id=connection_id,
@@ -46,7 +47,21 @@ def normalize_notion_page(
         source_url=url,
         excerpt="" if deleted else text[:EXCERPT_LIMIT],
         content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        author_external_id=author_id,
+        author_email=author_email,
+        author_name=author_name,
     )
+
+
+def _created_by(page: dict) -> tuple[str, str, str]:
+    created = page.get("created_by")
+    if not isinstance(created, dict):
+        return "", "", ""
+    author_id = created.get("id") if isinstance(created.get("id"), str) else ""
+    person = created.get("person") if isinstance(created.get("person"), dict) else {}
+    email = person.get("email") if isinstance(person.get("email"), str) else ""
+    name = person.get("name") if isinstance(person.get("name"), str) else ""
+    return author_id, email.strip().lower(), name.strip()
 
 
 def _title(page: dict) -> str:

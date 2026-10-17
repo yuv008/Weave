@@ -1,107 +1,98 @@
 """Fill Slack author names and merge the viewer onto the email person id.
 
 Only the address in ``WEAVE_VIEWER_EMAIL`` receives ``level`` and ``dept``.
-Everyone else keeps the Slack person id.
+Everyone else stays provisional until an org chart is seeded.
 """
 
 import os
 
-from shared.ids import person_id
+from app.graph.link_author import link_author
+from app.models.canonical import person_node_id
 from shared.schema import Label, Prop, Rel
 
-_AUTHORED = "AUTHORED"
+_LEGACY_AUTHORED = "AUTHORED"
 
 
 def enrich_slack_authors(graph, client, tenant_id: str) -> dict:
     if not hasattr(client, "user_profile"):
         return {"named": 0, "merged": False}
     viewer_email = os.environ.get("WEAVE_VIEWER_EMAIL", "").strip().lower()
-    level = os.environ.get("WEAVE_VIEWER_LEVEL", "").strip()
+    level_raw = os.environ.get("WEAVE_VIEWER_LEVEL", "").strip()
     dept = os.environ.get("WEAVE_VIEWER_DEPT", "").strip()
+    viewer_level = int(level_raw) if level_raw.isdigit() else None
     rows = graph.query(
         f"""
-        MATCH (p:{Label.PERSON})
-        WHERE p.{Prop.TENANT_ID} = $tenant AND p.{Prop.SLACK_ID} IS NOT NULL
-        RETURN p.{Prop.ID}, p.{Prop.SLACK_ID}
+        MATCH (m:{Label.MESSAGE}:{Label.ITEM})
+        WHERE m.{Prop.TENANT_ID} = $tenant AND m.{Prop.SOURCE} = 'slack'
+          AND coalesce(m.author_external_id, '') <> ''
+        RETURN m.id, m.author_external_id, m.workspace_id
         """,
         {"tenant": tenant_id},
     ).result_set
+    profiles: dict[str, tuple[str, str]] = {}
+    named_users: set[str] = set()
+    dropped_legacy: set[tuple[str, str]] = set()
     named = 0
     merged = False
-    for node_id, slack_id in rows:
-        try:
-            profile = client.user_profile(slack_id)
-        except Exception as exc:
-            if "missing_scope" in str(exc):
-                return {"named": named, "merged": merged, "error": "missing_scope"}
+    for msg_id, slack_id, workspace_id in rows:
+        if not isinstance(slack_id, str) or not slack_id or not isinstance(msg_id, str):
             continue
-        email = str(profile.get("email") or "").strip().lower()
-        name = str(profile.get("name") or "").strip()
-        if viewer_email and email == viewer_email:
-            _merge_viewer(
+        if slack_id not in profiles:
+            try:
+                profile = client.user_profile(slack_id)
+            except Exception as exc:
+                if "missing_scope" in str(exc):
+                    return {"named": named, "merged": merged, "error": "missing_scope"}
+                continue
+            email = str(profile.get("email") or "").strip().lower()
+            name = str(profile.get("name") or "").strip()
+            profiles[slack_id] = (email, name)
+        email, name = profiles[slack_id]
+        if not email:
+            continue
+        if viewer_email and email == viewer_email and viewer_level is not None and dept:
+            link_author(
                 graph,
                 tenant_id=tenant_id,
-                old_id=node_id,
-                slack_id=slack_id,
-                email=viewer_email,
+                item_id=msg_id,
+                email=email,
                 name=name,
-                level=int(level) if level else None,
-                dept=dept or None,
+                slack_id=slack_id,
+                level=viewer_level,
+                dept=dept,
             )
             merged = True
-            continue
-        if name:
-            graph.query(
-                f"MATCH (p:{Label.PERSON} {{{Prop.ID}: $id}}) SET p.{Prop.NAME} = $name",
-                {"id": node_id, "name": name},
+        else:
+            link_author(
+                graph,
+                tenant_id=tenant_id,
+                item_id=msg_id,
+                email=email,
+                name=name,
+                slack_id=slack_id,
             )
-            named += 1
+            if slack_id not in named_users:
+                named_users.add(slack_id)
+                named += 1
+        legacy_key = (workspace_id, slack_id) if isinstance(workspace_id, str) and workspace_id else None
+        if legacy_key and legacy_key not in dropped_legacy:
+            dropped_legacy.add(legacy_key)
+            _drop_legacy_slack_person(graph, tenant_id, workspace_id, slack_id)
     return {"named": named, "merged": merged}
 
 
-def _merge_viewer(graph, *, tenant_id, old_id, slack_id, email, name, level, dept) -> None:
-    viewer = person_id(tenant_id, email)
+def _drop_legacy_slack_person(graph, tenant_id: str, workspace_id: str, slack_id: str) -> None:
+    legacy_id = person_node_id(tenant_id, workspace_id, slack_id)
     graph.query(
         f"""
-        MERGE (p:{Label.PERSON} {{{Prop.ID}: $id}})
-        SET p.{Prop.TENANT_ID} = $tenant,
-            p.{Prop.EMAIL} = $email,
-            p.{Prop.NAME} = $name,
-            p.{Prop.SLACK_ID} = $slack,
-            p.{Prop.LEVEL} = $level,
-            p.{Prop.DEPT} = $dept
+        MATCH (old:{Label.PERSON} {{id: $old}})
+        OPTIONAL MATCH (old)-[a:{_LEGACY_AUTHORED}]->()
+        DELETE a
+        WITH old
+        OPTIONAL MATCH ()-[ab:{Rel.AUTHORED_BY}]->(old)
+        DELETE ab
+        WITH old
+        DETACH DELETE old
         """,
-        {
-            "id": viewer,
-            "tenant": tenant_id,
-            "email": email,
-            "name": name or None,
-            "slack": slack_id,
-            "level": level,
-            "dept": dept,
-        },
-    )
-    if old_id == viewer:
-        return
-    graph.query(
-        f"""
-        MATCH (old:{Label.PERSON} {{{Prop.ID}: $old}})-[r:{_AUTHORED}]->(m)
-        MERGE (viewer:{Label.PERSON} {{{Prop.ID}: $viewer}})
-        MERGE (viewer)-[:{_AUTHORED}]->(m)
-        DELETE r
-        """,
-        {"old": old_id, "viewer": viewer},
-    )
-    graph.query(
-        f"""
-        MATCH (m)-[r:{Rel.AUTHORED_BY}]->(old:{Label.PERSON} {{{Prop.ID}: $old}})
-        MERGE (viewer:{Label.PERSON} {{{Prop.ID}: $viewer}})
-        MERGE (m)-[:{Rel.AUTHORED_BY}]->(viewer)
-        DELETE r
-        """,
-        {"old": old_id, "viewer": viewer},
-    )
-    graph.query(
-        f"MATCH (old:{Label.PERSON} {{{Prop.ID}: $old}}) DETACH DELETE old",
-        {"old": old_id},
+        {"old": legacy_id},
     )

@@ -38,6 +38,8 @@ class CanonicalDocument(BaseModel):
     kind: str = ""
     status: str = ""
     author_external_id: str = ""
+    author_email: str = ""
+    author_name: str = ""
     parent_external_id: str | None = None
     repo_slug: str = ""
 

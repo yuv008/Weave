@@ -53,6 +53,30 @@ class HubspotClient:
             ["dealname", "dealstage", "closedate", "hubspot_owner_id", "hs_lastmodifieddate", "associatedcompanyid"],
         )
 
+    def list_owner_emails(self) -> dict[str, str]:
+        """Map HubSpot owner id to email. Requires ``crm.objects.owners.read``."""
+        out: dict[str, str] = {}
+        after: str | None = None
+        while True:
+            path = "/crm/v3/owners?limit=100"
+            if after:
+                path += f"&after={after}"
+            page = self._call_get(path)
+            results = page.get("results") if isinstance(page.get("results"), list) else []
+            for row in results:
+                if not isinstance(row, dict):
+                    continue
+                oid = row.get("id")
+                email = row.get("email")
+                if oid is not None and isinstance(email, str) and "@" in email:
+                    out[str(oid)] = email.strip().lower()
+            paging = page.get("paging") if isinstance(page.get("paging"), dict) else {}
+            next_after = paging.get("next", {}).get("after") if isinstance(paging.get("next"), dict) else None
+            if not next_after:
+                break
+            after = str(next_after)
+        return out
+
     def _search(self, object_type: str, modified_after_ms: int, after: str | None, properties: list[str]) -> dict:
         body = {
             "filterGroups": [
@@ -107,6 +131,36 @@ class HubspotClient:
             return parsed
         raise last_error or HubspotRequestError(0, "failed")
 
+    def _call_get(self, path: str) -> dict:
+        url = f"{_API}{path}"
+        headers = {"Authorization": f"Bearer {self._token}"}
+        last_error: Exception | None = None
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                status, _hdrs, raw = _urlopen_get(url, headers)
+            except OSError as exc:
+                last_error = exc
+                if attempt == _MAX_ATTEMPTS:
+                    raise
+                self._sleep(self._backoff(attempt))
+                continue
+            if status == 429 or status >= 500:
+                last_error = HubspotRequestError(status, "retryable")
+                if attempt == _MAX_ATTEMPTS:
+                    raise last_error
+                self._sleep(self._backoff(attempt))
+                continue
+            if status >= 400:
+                raise HubspotRequestError(status, _api_error(raw))
+            try:
+                parsed = json.loads(raw) if raw else {}
+            except json.JSONDecodeError as exc:
+                raise HubspotRequestError(status, "invalid_json") from exc
+            if not isinstance(parsed, dict):
+                raise HubspotRequestError(status, "invalid_json")
+            return parsed
+        raise last_error or HubspotRequestError(0, "failed")
+
     def _backoff(self, attempt: int) -> float:
         return 0.5 * (2 ** (attempt - 1)) * (0.5 + self._random())
 
@@ -121,6 +175,15 @@ def hubspot_client_from_env() -> HubspotClient:
 
 def _urlopen_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[int, dict[str, str], bytes]:
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status, dict(response.headers.items()), response.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, dict(exc.headers.items()), exc.read()
+
+
+def _urlopen_get(url: str, headers: dict[str, str]) -> tuple[int, dict[str, str], bytes]:
+    request = urllib.request.Request(url, headers=headers, method="GET")
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             return response.status, dict(response.headers.items()), response.read()

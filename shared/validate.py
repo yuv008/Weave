@@ -106,6 +106,10 @@ def validate(tenant: str, nodes: list[NodeRow], edges: list[EdgeRow]) -> list[st
             errors.append(f"{label} {node_id}: no EVIDENCED_BY")
         if label == Label.ITEM and sum(e.rel == Rel.IN_SOURCE for e in mine) != 1:
             errors.append(f"Item {node_id}: needs exactly one IN_SOURCE")
+        if label == Label.ITEM and _item_has_author_email(props):
+            authored = sum(1 for e in mine if e.rel == Rel.AUTHORED_BY)
+            if authored != 1:
+                errors.append(f"Item {node_id}: needs exactly one AUTHORED_BY when author email is known")
         if label == Label.PROJECTION:
             targets = [e.dst for e in mine if e.rel == Rel.SUMMARIZES]
             if targets != [props.get(Prop.ORIGIN_ID)]:
@@ -157,9 +161,23 @@ def _node_errors(tenant: str, node_id: str, label: str, props: dict) -> list[str
             errors.append(f"{node_id}: min_level must be one of {LEVELS}")
     if label == Label.SOURCE and props.get(Prop.CASCADE_POLICY) not in CASCADE_POLICIES:
         errors.append(f"{node_id}: cascade_policy not in {CASCADE_POLICIES}")
-    if label == Label.PERSON and props.get(Prop.LEVEL) not in LEVELS:
-        errors.append(f"{node_id}: level must be one of {LEVELS}")
+    if label == Label.PERSON:
+        provisional = props.get(Prop.PROVISIONAL) is True
+        if not provisional:
+            if props.get(Prop.LEVEL) not in LEVELS:
+                errors.append(f"{node_id}: level must be one of {LEVELS}")
+            dept = props.get(Prop.DEPT)
+            if not isinstance(dept, str) or not dept.strip():
+                errors.append(f"{node_id}: dept must be a non-empty string")
     return errors
+
+
+def _item_has_author_email(props: dict) -> bool:
+    for key in ("author_email", "author_external_id"):
+        value = props.get(key)
+        if isinstance(value, str) and "@" in value:
+            return True
+    return False
 
 
 def _acl_list_errors(node_id: str, prop: str, value) -> list[str]:

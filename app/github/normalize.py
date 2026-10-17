@@ -47,6 +47,8 @@ def normalize_github_issue(
         kind=resolved_kind,
         status="" if deleted else _status(issue, resolved_kind),
         author_external_id=_login(issue),
+        author_email=_email(issue),
+        author_name=_login(issue),
         repo_slug=_slug(owner, repo),
     )
 
@@ -88,6 +90,8 @@ def normalize_github_comment(
         kind="comment",
         status="",
         author_external_id=_login(comment),
+        author_email=_email(comment),
+        author_name=_login(comment),
         parent_external_id=f"issue:{parent}",
         repo_slug=_slug(owner, repo),
     )
@@ -127,6 +131,13 @@ def _login(payload: dict) -> str:
     user = payload.get("user")
     if isinstance(user, dict) and isinstance(user.get("login"), str):
         return user["login"]
+    return ""
+
+
+def _email(payload: dict) -> str:
+    user = payload.get("user")
+    if isinstance(user, dict) and isinstance(user.get("email"), str):
+        return user["email"].strip().lower()
     return ""
 
 

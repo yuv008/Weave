@@ -121,15 +121,15 @@ def test_replaying_a_message_keeps_a_single_node_and_edge(graph):
     assert placeholder is False
     assert deleted is False
     assert count == 1
-    contains = _rows(
+    in_source = _rows(
         graph,
         """
-        MATCH (c:Conversation)-[r:CONTAINS]->(m:Message {id: $id})
+        MATCH (m:Message {id: $id})-[r:IN_SOURCE]->(:Conversation)
         RETURN count(r)
         """,
         {"id": message.node_id},
     )
-    assert contains[0][0] == 1
+    assert in_source[0][0] == 1
 
 
 def test_older_version_does_not_overwrite(graph):
@@ -195,13 +195,13 @@ def test_reply_before_parent_creates_a_placeholder_that_is_filled(graph):
         """,
         {"reply_id": reply.node_id, "parent_id": parent.node_id},
     )
-    authors = _rows(
+    author_id = _rows(
         graph,
         """
-        MATCH (p:Person {id: $person_id})-[:AUTHORED]->(m:Message {id: $reply_id})
-        RETURN count(p)
+        MATCH (m:Message {id: $reply_id})
+        RETURN m.author_external_id
         """,
-        {"person_id": reply.person_node_id, "reply_id": reply.node_id},
+        {"reply_id": reply.node_id},
     )
     assert replies[0][0] == 1
-    assert authors[0][0] == 1
+    assert author_id[0][0] == "U2"

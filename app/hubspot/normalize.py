@@ -43,6 +43,7 @@ class HubspotCompany:
             content_hash=hashlib.sha256(excerpt.encode("utf-8")).hexdigest(),
             kind="company",
             author_external_id=self.owner_email or "",
+            author_email=self.owner_email or "",
         )
 
 
@@ -89,6 +90,7 @@ class HubspotDeal:
             content_hash=hashlib.sha256(excerpt.encode("utf-8")).hexdigest(),
             kind="deal",
             author_external_id=self.owner_email or "",
+            author_email=self.owner_email or "",
         )
 
 

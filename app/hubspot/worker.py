@@ -6,6 +6,7 @@ import time
 from app.graph.policy import allowed_source, hubspot_source_id
 from app.graph.upsert import ensure_indexes
 from app.graph.upsert_hubspot import upsert_hubspot_company, upsert_hubspot_deal
+from app.hubspot.client import HubspotRequestError
 from app.hubspot.normalize import normalize_company, normalize_deal
 from app.ingest.chunks import index_source
 from app.ingest.log import format_document_log
@@ -45,7 +46,7 @@ def poll_portal(
     sync_id = hubspot_sync_id(tenant_id, portal_id)
     state = _read(records, sync_id)
     watermark = int(state.get("modified_after_ms") or 0)
-    owners = owner_emails or {}
+    owners = owner_emails if owner_emails is not None else _owner_emails(client)
     company_names: dict[str, str] = {}
     started = time.perf_counter()
     greatest = watermark
@@ -131,3 +132,15 @@ def _write(records, sync_id: str, payload: dict) -> None:
 
 def _elapsed(started: float) -> int:
     return int((time.perf_counter() - started) * 1000)
+
+
+def _owner_emails(client) -> dict[str, str]:
+    loader = getattr(client, "list_owner_emails", None)
+    if loader is None:
+        return {}
+    try:
+        return loader()
+    except HubspotRequestError as exc:
+        if exc.status in (401, 403):
+            return {}
+        raise

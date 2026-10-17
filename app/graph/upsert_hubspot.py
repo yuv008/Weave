@@ -37,18 +37,15 @@ MERGE (d)-[:{Rel.MENTIONS}]->(cust)
 """,
             {"doc_id": company.document.node_id, "customer_id": company.customer_id},
         )
-    if company.owner_email:
+    if company.owner_email and doc.applied:
         graph.query(
             f"""
 MERGE (p:{Label.PERSON} {{id: $person_id}})
-SET p.{Prop.TENANT_ID} = $tenant_id, p.{Prop.EMAIL} = $email, p.{Prop.NAME} = $email
 MERGE (cust:{Label.CUSTOMER} {{id: $customer_id}})
 MERGE (p)-[:{Rel.OWNS}]->(cust)
 """,
             {
                 "person_id": person_id(company.tenant_id, company.owner_email),
-                "tenant_id": company.tenant_id,
-                "email": company.owner_email,
                 "customer_id": company.customer_id,
             },
         )
@@ -99,18 +96,15 @@ MERGE (d)-[:{Rel.MENTIONS}]->(cust)
 """,
             {"doc_id": deal.document.node_id, "customer_id": deal.customer_id},
         )
-    if deal.owner_email:
+    if deal.owner_email and doc.applied:
         graph.query(
             f"""
 MERGE (p:{Label.PERSON} {{id: $person_id}})
-SET p.{Prop.TENANT_ID} = $tenant_id, p.{Prop.EMAIL} = $email, p.{Prop.NAME} = $email
 MERGE (deal:{Label.DEAL} {{id: $deal_id}})
 MERGE (p)-[:{Rel.OWNS}]->(deal)
 """,
             {
                 "person_id": person_id(deal.tenant_id, deal.owner_email),
-                "tenant_id": deal.tenant_id,
-                "email": deal.owner_email,
                 "deal_id": deal.deal_entity_id,
             },
         )

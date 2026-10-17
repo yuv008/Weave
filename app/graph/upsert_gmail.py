@@ -3,6 +3,7 @@
 import hashlib
 from datetime import UTC, datetime
 
+from app.graph.link_author import link_author
 from app.graph.policy import allowed_source, gmail_source_id
 from app.graph.upsert import UpsertResult
 from app.models.canonical_gmail import CanonicalGmailMessage
@@ -60,16 +61,6 @@ MERGE (m:{Label.MESSAGE} {{id: $msg_id}})
 MERGE (m)-[:{Rel.IN_SOURCE}]->(s)
 """
 
-_LINK_AUTHOR = f"""
-MERGE (p:{Label.PERSON} {{id: $person_id}})
-SET
-  p.{Prop.TENANT_ID} = $tenant_id,
-  p.{Prop.EMAIL} = $author_email,
-  p.{Prop.NAME} = $author_email
-MERGE (m:{Label.MESSAGE} {{id: $msg_id}})
-MERGE (m)-[:{Rel.AUTHORED_BY}]->(p)
-"""
-
 _LINK_PARENT = f"""
 MERGE (parent:{Label.MESSAGE}:{Label.ITEM} {{id: $parent_id}})
 ON CREATE SET
@@ -107,10 +98,13 @@ def upsert_gmail_message(graph, message: CanonicalGmailMessage, *, now: datetime
     if not rows:
         return UpsertResult(node_id=message.node_id, applied=False)
     graph.query(_LINK_SOURCE, params)
-    if message.person_node_id is not None and message.author_email:
-        graph.query(
-            _LINK_AUTHOR,
-            {**params, "person_id": message.person_node_id, "author_email": message.author_email},
+    if message.author_email:
+        link_author(
+            graph,
+            tenant_id=message.tenant_id,
+            item_id=message.node_id,
+            email=message.author_email,
+            name=message.author_email,
         )
     if message.parent_node_id is not None and message.thread_parent_external_id:
         graph.query(

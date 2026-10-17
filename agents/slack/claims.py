@@ -8,7 +8,7 @@ mention in the same thread still gets its own answer.
 import threading
 from contextlib import contextmanager
 
-from shared.pg import use_tenant
+from shared.pg import connect_pg, use_tenant
 
 
 class MemoryReplyClaims:
@@ -68,7 +68,7 @@ class PostgresReplyClaims:
 
     @contextmanager
     def thread(self, channel_id: str, thread_ts: str):
-        conn = self._connect()
+        conn = connect_pg(direct=True)
         key = f"{channel_id}:{thread_ts}"
         try:
             with conn.cursor() as cur:

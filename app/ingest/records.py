@@ -84,6 +84,14 @@ class PostgresStore:
     def __init__(self, dsn: str) -> None:
         self.dsn = dsn
 
+    def _connect(self):
+        from shared.pg import connect_pg
+
+        default = os.environ.get("DATABASE_URL", "")
+        if self.dsn == default:
+            return connect_pg()
+        return connect_pg(url=self.dsn)
+
     def get(self, record_id: str) -> dict | None:
         row = self._one(
             "SELECT id, tenant_id, kind, payload FROM ingest_record WHERE id = %s",
@@ -141,9 +149,8 @@ class PostgresStore:
         if not rows:
             return
         from fixtures.seed import vector_literal
-        from shared.pg import connect_pg
 
-        conn = connect_pg(url=self.dsn)
+        conn = self._connect()
         try:
             with conn.cursor() as cur:
                 cur.executemany(
@@ -176,9 +183,7 @@ class PostgresStore:
     def delete_chunks(self, item_ids: list[str]) -> None:
         if not item_ids:
             return
-        from shared.pg import connect_pg
-
-        conn = connect_pg(url=self.dsn)
+        conn = self._connect()
         try:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM chunk WHERE item_id = ANY(%s)", (item_ids,))
@@ -197,9 +202,7 @@ class PostgresStore:
         )
 
     def list_kind(self, kind: str) -> list[dict]:
-        from shared.pg import connect_pg
-
-        conn = connect_pg(url=self.dsn)
+        conn = self._connect()
         try:
             cur = conn.cursor()
             cur.execute(
@@ -216,9 +219,9 @@ class PostgresStore:
         ]
 
     def _run(self, sql: str, params: tuple, *, tenant: str | None = None) -> None:
-        from shared.pg import connect_pg, use_tenant
+        from shared.pg import use_tenant
 
-        conn = connect_pg(url=self.dsn)
+        conn = self._connect()
         try:
             use_tenant(conn, tenant)
             cur = conn.cursor()
@@ -228,9 +231,9 @@ class PostgresStore:
             conn.close()
 
     def _one(self, sql: str, params: tuple, *, tenant: str | None = None):
-        from shared.pg import connect_pg, use_tenant
+        from shared.pg import use_tenant
 
-        conn = connect_pg(url=self.dsn)
+        conn = self._connect()
         try:
             use_tenant(conn, tenant)
             cur = conn.cursor()

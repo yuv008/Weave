@@ -36,12 +36,12 @@ class PostgresGateStore:
     def warm(self) -> None:
         """Open the kept connection before the first cue."""
 
-        def query(conn):
+        def ping(conn):
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
                 cur.fetchone()
 
-        self._using(query)
+        self._using(ping)
 
     def _borrow(self):
         conn = self._conn
@@ -85,16 +85,16 @@ class PostgresGateStore:
                         pass
 
     def token_owner(self, token_sha256: str) -> tuple[str, str] | None:
-        def query(conn):
+        def read_owner(conn):
             with conn.cursor() as cur:
                 cur.execute(TOKEN_OWNER_SQL, (token_sha256,))
                 return cur.fetchone()
 
-        row = self._using(query)
+        row = self._using(read_owner)
         return (row[0], row[1]) if row else None
 
     def snapshot(self, tenant: str) -> AclSnapshot:
-        def query(conn):
+        def read_snapshot(conn):
             if not hasattr(conn, "pipeline"):
                 use_tenant(conn, tenant)
                 with conn.cursor() as cur:
@@ -123,7 +123,7 @@ class PostgresGateStore:
                 for cur in (setup, config, members_cur, sync_cur, epoch_cur):
                     cur.close()
 
-        members, syncs, epoch = self._using(query)
+        members, syncs, epoch = self._using(read_snapshot)
 
         memberships: dict[str, set[str]] = defaultdict(set)
         for person_id, group in members:

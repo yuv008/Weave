@@ -71,9 +71,14 @@ wins.
     `FALKORDB_URL` (`falkor://user:password@host:port`). Code in
     `shared/` reads it through `shared/graphdb.py`.
 -   **Neon Postgres** (pgvector) for memberships, sync times, the
-    ChangeEvent outbox and chunks. `DATABASE_URL` is the pooled
-    endpoint for queries; `DATABASE_URL_UNPOOLED` is direct and must be
-    used for migrations. `shared/pg.py` picks the right one.
+    ChangeEvent outbox and chunks. `DATABASE_URL` is Neon’s PgBouncer
+    (transaction mode) endpoint; `DATABASE_URL_UNPOOLED` is direct and must be
+    used for migrations. `shared/pg.py` adds a process-local
+    `psycopg_pool` on top: normal queries check out from the query pool
+    (max 8); row locks and Slack advisory locks use a small direct pool
+    (max 2). `connect_pg(url=...)` stays one-shot for tests. Long-running
+    processes call `warm_pg()` at startup so the first cue does not pay a
+    fresh TLS handshake.
 -   Credentials are shared privately and live in `.env` / `.env.local`
     (both gitignored). Never commit, log or print them.
 -   Tenant `acme` (graph `co:acme`) is the fake company. Do not write

@@ -107,6 +107,13 @@ def create_app(
     )
     app.state.reply_claims = reply_claims
     app.state.slack_runner = slack_runner
+    if graph is None and store is None and os.environ.get("DATABASE_URL"):
+        try:
+            from shared.pg import warm_pg
+
+            warm_pg()
+        except Exception:
+            pass
 
     @app.get("/health")
     def health():

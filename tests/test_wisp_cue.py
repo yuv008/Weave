@@ -15,6 +15,7 @@ from agents.gate.rules import item_is_visible
 from agents.graph import ReadOnlyGraph
 from agents.memory.store import Episode, terms
 from agents.mcp.server import build_app
+from agents.wisp.cue import _source_from_id
 from shared.acl import ORG_WIDE
 from shared.schema import Label, Prop, Rel
 from tests.answer_support import SubjectGraph, offline_runtime
@@ -93,7 +94,8 @@ class ChunkCursor:
         compact = " ".join(sql.split())
         if "plainto_tsquery" not in compact:
             raise AssertionError("cue search issued an unexpected statement")
-        self._rows = _keyword_hits(self.fx, params or {})
+        limit = 1 if "LIMIT 1" in compact else int((params or {}).get("limit") or 8)
+        self._rows = _keyword_hits(self.fx, params or {}, limit=limit)
 
     def fetchall(self):
         return list(self._rows)
@@ -126,7 +128,7 @@ def _chunk_visible(chunk, params):
     return bool(acl) and acl <= allowed and bool(acl & groups) and item_id.startswith(prefix)
 
 
-def _keyword_hits(fx, params):
+def _keyword_hits(fx, params, limit=8):
     wanted = set(terms(params.get("query") or ""))
     scored = []
     for chunk in fx.chunks:
@@ -134,9 +136,9 @@ def _keyword_hits(fx, params):
             continue
         score = len(wanted & set(terms(chunk["text"])))
         if score:
-            scored.append((score, chunk["item_id"]))
+            scored.append((score, chunk["item_id"], chunk["text"]))
     scored.sort(key=lambda row: (-row[0], row[1]))
-    return [(item_id,) for _, item_id in scored[: int(params.get("limit") or 8)]]
+    return [(item_id, text) for _, item_id, text in scored[:limit]]
 
 
 def _add_episode(env, episode_id, *, note, question, person="sam", audience="person", created_at=None):
@@ -177,6 +179,28 @@ def _source_name(env, item_id):
     return _name(env.fx, _dst(env.fx, item_id, Rel.IN_SOURCE))
 
 
+def test_cue_returns_the_best_chunk_when_several_match(env):
+    fx = env.fx
+    template = next(c for c in fx.chunks if c["item_id"] == fx.ids["item_eng_public_update"])
+    weak_id = f"{fx.tenant}:slack:message:CWEAK:1.0"
+    strong_id = f"{fx.tenant}:gdrive:document:DSTRONG:1"
+    fx.chunks.append({**template, "item_id": weak_id, "text": "Weave pilot notes"})
+    fx.chunks.append({
+        **template,
+        "item_id": strong_id,
+        "text": "Weave Mock Acme pilot kickoff notes Drive Notion ingestion",
+    })
+    prompt = "Weave Mock Acme pilot kickoff notes"
+    with _client(env) as client:
+        response = _post(client, prompt)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "found"
+    assert body["item_id"] == strong_id
+    assert "kickoff" in body["quote"]
+    assert body["source"] == "gdrive"
+
+
 def test_a_visible_company_chunk_beats_a_personal_note(env):
     _add_episode(
         env, "ep_company_note",
@@ -189,7 +213,7 @@ def test_a_visible_company_chunk_beats_a_personal_note(env):
     assert response.status_code == 200
     body = response.json()
     item_id = _company_item(env)
-    source = _source_name(env, item_id)
+    source = _source_from_id(item_id)
     chunk = next(c["text"] for c in env.fx.chunks if c["item_id"] == item_id)
     assert set(body) == {"state", "summary", "quote", "source", "item_id"}
     assert body["state"] == "found"

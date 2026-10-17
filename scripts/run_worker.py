@@ -202,6 +202,12 @@ def main() -> None:
     from shared.env import load_env
 
     load_env()
+    try:
+        from shared.pg import warm_pg
+
+        warm_pg()
+    except Exception:
+        log.exception("postgres pool was not warmed")
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:
             signal.signal(sig, _request_stop)

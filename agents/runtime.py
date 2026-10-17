@@ -53,7 +53,7 @@ def live_runtime() -> Runtime:
     from shared.env import load_env
     from agents.wisp.cue import _reuse
     from shared.graphdb import connect
-    from shared.pg import connect_pg
+    from shared.pg import connect_pg, warm_pg
 
     load_env()
     cfg = load_config()
@@ -66,6 +66,7 @@ def live_runtime() -> Runtime:
     resolver = Resolver(gate, TenantDirectory(open_graph), stale_minutes=cfg.acl_stale_minutes)
     memory = PostgresMemoryStore(connect_pg)
     try:
+        warm_pg()
         gate.warm()
         memory.warm()
         _reuse(connect_pg)

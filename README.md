@@ -8,7 +8,7 @@ Use Python 3.12 (`requires-python` is `>=3.12`). From this directory, install wi
 
 Copy `.env.example` to `.env`. Put keys only in `.env`. That file is gitignored. Fill `GROQ_API_KEY`, `DATABASE_URL`, and either `FALKORDB_URL` or `FALKORDB_HOST` and `FALKORDB_PORT`. Fill the `SLACK_*` names from the example: `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_WORKSPACE_DOMAIN`, and `SLACK_USER_MAP`. Add `OPS_TOKEN` in `.env` when you want the ops page. Do not commit any of these values.
 
-On Neon, `DATABASE_URL` is the pooled endpoint. `DATABASE_URL_UNPOOLED` is the direct endpoint.
+On Neon, `DATABASE_URL` is the pooled endpoint. `DATABASE_URL_UNPOOLED` is the direct endpoint. Each Python process also keeps a small client pool in `shared/pg.py` (`psycopg-pool`) so repeated queries reuse an open connection to PgBouncer. Migrations and the watcher outbox still use the direct URL; normal agent, ingest, and Wisp cue traffic use the pooled URL. After upgrading dependencies, restart `python -m agents.mcp`, the webhook app, and `scripts/run_worker.py` if they are already running.
 
 ## Docker Compose
 
@@ -21,6 +21,16 @@ On Neon, `DATABASE_URL` is the pooled endpoint. `DATABASE_URL_UNPOOLED` is the d
 `deploy/README.md` documents the two cloudflared hostnames: one for the web UI and one for MCP. Cursor uses `https://<mcp-host>/mcp` with `Authorization: Bearer <token>`. The token comes from `python -m scripts.issue_demo_tokens`. Keep it out of git.
 
 Slack and GitHub webhooks stay on `uvicorn app.main:app` at port 8000. They are separate from the five Compose services. See `prompts/slack-events-url.md`.
+
+## Tests
+
+Install optional extras with `pip install -e ".[dev,embed]"` (`embed` is only needed for poll-time chunk embeddings).
+
+Offline checks for Postgres pools, gate, and Wisp cue (including multiple chunk matches):
+
+`python -m pytest tests/test_pg_pool.py tests/test_rls.py tests/test_wisp_cue.py tests/test_gate.py -q`
+
+Full offline suite: `python -m pytest tests/ -q` (loads `.env` via `tests/conftest.py` when present).
 
 ## Migrations
 

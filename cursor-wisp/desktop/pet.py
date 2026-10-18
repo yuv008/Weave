@@ -1,12 +1,15 @@
 """A desktop companion. It hangs beside the text caret while you type.
 
-It reads the Cursor chat draft so it can suggest a note before you send.
-The draft is kept in memory for that lookup and is never written to the log.
+It answers when the Cursor prompt contains @bubble.
+Accepting that answer replaces @bubble with it.
+The draft is kept in memory for that question and is never written to the log.
 Left-click and drag the body to move it. Right-click nudges it.
 Double right-click changes character. Ctrl+Alt+. brings it to the mouse.
 Ctrl+Alt+W closes it.
 
 POST /suggestion on 127.0.0.1 pings the pet, then opens a card to its left.
+POST /ask answers one @bubble question without holding the caller.
+POST /mail on 127.0.0.1:8766 is the Gmail compose bridge. Chrome cannot read wisp.port.
 """
 
 import array
@@ -18,6 +21,8 @@ import math
 import os
 import queue
 import re
+import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -29,6 +34,7 @@ import winsound
 from ctypes import wintypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -54,6 +60,10 @@ user32.GetDpiForWindow.argtypes = [wintypes.HWND]
 user32.GetDpiForWindow.restype = wintypes.UINT
 
 HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+from bubble import bubble_question, replace_bubble_sentence
+
 REPO = HERE.parent.parent
 FRAME = HERE.parent / "overlay" / "wisp-frame.html"
 LOG = HERE / "pet.log"
@@ -65,7 +75,15 @@ OPEN_WIDTH = 560
 OPEN_HEIGHT = 280
 IGNORE_FOR = 10 * 60
 SUGGEST_BODY_MAX = 65536
+MAIL_PORT = 8766
+MAIL_URL = "http://127.0.0.1:8765/wisp/mail"
+MAIL_BODY_MAX = 524288
 ALERT_FOR = 0.35
+ASK_SETTLE = 0.7
+# scripts/ask.py waits 120s. A real /answer is often slower than 20s.
+ANSWER_TIMEOUT = 120
+MAX_QUESTION = 1500
+_BUBBLE = re.compile(r"@bubble", re.IGNORECASE)
 
 
 def _notice_wav():
@@ -250,6 +268,9 @@ class SuggestState:
         self.quote = ""
         self.source = ""
         self.item_id = ""
+        self.mail_insert = ""
+        self.mail_mode = ""
+        self.reading = False
         self.ignored = {}
 
     def blocked(self, item_id):
@@ -302,12 +323,21 @@ def _accepting():
     return pet_ref is not None and pet_ref.accept_latched
 
 
-def offer_suggestion(data):
+def offer_suggestion(data, mail=None):
     """Show a found cue on the pet. A card already open swaps to the new match."""
     if not isinstance(data, dict) or data.get("state") != "found":
         return False
     item_id = _plain(data.get("item_id"))
-    if suggest_state.blocked(item_id):
+    mail_insert = ""
+    mail_mode = ""
+    if isinstance(mail, dict):
+        mail_insert = _plain(mail.get("insert")).strip()
+        mail_mode = _plain(mail.get("mode")).strip().lower()
+        if not mail_insert:
+            return False
+        if mail_mode not in ("draft", "sentence"):
+            mail_mode = "sentence"
+    elif suggest_state.blocked(item_id):
         return False
     payload = {
         "summary": _plain(data.get("summary")),
@@ -326,19 +356,26 @@ def offer_suggestion(data):
             and (suggest_state.open or suggest_state.pending)
         )
         if same:
+            if mail_insert:
+                suggest_state.mail_insert = mail_insert
+                suggest_state.mail_mode = mail_mode
             return True
         suggest_state.seq += 1
         payload["seq"] = suggest_state.seq
         suggest_state.pending = True
         suggest_state.turn_ended = False
+        suggest_state.mail_insert = mail_insert
+        suggest_state.mail_mode = mail_mode
     ui_queue.put(("show", payload))
     return True
 
 
 def retire_suggestion():
-    """Close the card when the draft no longer matches a stored note."""
+    """Close the card when the Cursor draft no longer matches a stored note."""
     with suggest_state.lock:
         if _accepting() or not (suggest_state.open or suggest_state.pending):
+            return
+        if suggest_state.mail_insert:
             return
         suggest_state.seq += 1
         suggest_state.pending = False
@@ -388,6 +425,9 @@ class SuggestHandler(BaseHTTPRequestHandler):
         if path == "/turn-ended":
             self._turn_ended()
             return
+        if path == "/ask":
+            self._bubble_ask(body)
+            return
         if path != "/suggestion" or body is None:
             self._empty(204 if path == "/suggestion" else 404)
             return
@@ -407,6 +447,21 @@ class SuggestHandler(BaseHTTPRequestHandler):
             return
         offer_suggestion(data)
         self._empty(204)
+
+    def _bubble_ask(self, body):
+        """Accept a question and return before the agent answers."""
+
+        question = ""
+        if body:
+            try:
+                data = json.loads(body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                data = None
+            if isinstance(data, dict) and isinstance(data.get("question"), str):
+                question = data["question"]
+        self._empty(204)
+        if question.strip() and draft_watch is not None:
+            draft_watch.submit(question, duplicate_log=True)
 
 
 def start_suggest_server():
@@ -432,6 +487,222 @@ def cleanup_port():
         PORT_FILE.unlink()
     except OSError:
         pass
+
+
+class MailBridge:
+    """Gmail compose bridge. The email body and the bearer token are never logged."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.pending = None
+        self.generation = 0
+        self._inflight = None
+
+    def submit(self, payload):
+        key = (payload.get("to") or "", payload.get("subject") or "", payload.get("body") or "")
+        with self.lock:
+            if key == self._inflight:
+                return
+            self.generation += 1
+            generation = self.generation
+            self._inflight = key
+        ui_queue.put(("reading", None))
+        threading.Thread(
+            target=self._run,
+            args=(payload, generation, key),
+            name="wisp-mail",
+            daemon=True,
+        ).start()
+
+    def _run(self, payload, generation, key):
+        data = None
+        missing = False
+        try:
+            watcher = draft_watch
+            if watcher is None or not watcher._load_token():
+                missing = True
+            else:
+                data = watcher._post_json(MAIL_URL, payload, 70)
+        except Exception:
+            data = None
+        finally:
+            with self.lock:
+                if self._inflight == key and self.generation == generation:
+                    self._inflight = None
+        with self.lock:
+            if self.generation != generation:
+                return
+        if missing:
+            log("mail no token")
+            ui_queue.put(("mail-done", None))
+            return
+        if not isinstance(data, dict):
+            log("mail down")
+            ui_queue.put(("mail-done", None))
+            return
+        insert = _plain(data.get("insert")).strip()
+        mode = _plain(data.get("mode")).strip().lower()
+        if data.get("state") != "found" or not insert:
+            log("mail unsure")
+            ui_queue.put(("mail-miss", None))
+            return
+        if mode not in ("draft", "sentence"):
+            mode = "sentence"
+        if offer_suggestion(data, mail={"insert": insert, "mode": mode}):
+            log("mail shown")
+            return
+        log("mail quiet")
+        ui_queue.put(("mail-done", None))
+
+    def store_insert(self, insert, mode):
+        with self.lock:
+            self.pending = {"insert": insert, "mode": mode}
+
+    def take_insert(self):
+        with self.lock:
+            item = self.pending
+            self.pending = None
+            return item
+
+    def clear_insert(self):
+        with self.lock:
+            self.pending = None
+
+
+mail_bridge = MailBridge()
+mail_server = None
+
+
+class MailHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, fmt, *args):
+        return
+
+    def handle_error(self):
+        return
+
+    def _path(self):
+        path = self.path.split("?", 1)[0]
+        if len(path) > 1:
+            path = path.rstrip("/")
+        return path
+
+    def _cors(self):
+        origin = self.headers.get("Origin")
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        else:
+            self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    def _empty(self, code):
+        self.close_connection = True
+        try:
+            self.send_response(code)
+            self._cors()
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        except OSError:
+            pass
+
+    def _json(self, payload):
+        raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.close_connection = True
+        try:
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(raw)
+        except OSError:
+            pass
+
+    def _read_body(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            return b""
+        if length <= 0:
+            return b""
+        if length > MAIL_BODY_MAX:
+            return None
+        return self.rfile.read(length)
+
+    def do_OPTIONS(self):
+        self._empty(204)
+
+    def do_GET(self):
+        if self._path() != "/mail-insert":
+            self._empty(404)
+            return
+        item = mail_bridge.take_insert()
+        if not item:
+            self._empty(204)
+            return
+        self._json({"insert": item["insert"], "mode": item["mode"]})
+
+    def do_POST(self):
+        if self._path() != "/mail":
+            self._empty(404)
+            return
+        body = self._read_body()
+        if body is None:
+            log("mail too large")
+            self._empty(204)
+            return
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self._empty(204)
+            return
+        if not isinstance(data, dict):
+            self._empty(204)
+            return
+        payload = {
+            "to": _plain(data.get("to")),
+            "subject": _plain(data.get("subject")),
+            "body": _plain(data.get("body")),
+        }
+        if not _BUBBLE.search(payload["body"]):
+            self._empty(204)
+            return
+        mail_bridge.submit(payload)
+        self._empty(204)
+
+
+class MailServer(ThreadingHTTPServer):
+    """Fixed port. Do not set SO_REUSEADDR: on Windows that lets a second bind succeed."""
+
+    allow_reuse_address = False
+
+    def server_bind(self):
+        exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        if exclusive is not None:
+            try:
+                self.socket.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+            except OSError:
+                pass
+        super().server_bind()
+
+
+def start_mail_server():
+    global mail_server
+    try:
+        server = MailServer(("127.0.0.1", MAIL_PORT), MailHandler)
+    except OSError:
+        log("mail port busy")
+        return
+    server.daemon_threads = True
+    mail_server = server
+    thread = threading.Thread(target=mail_server.serve_forever, name="wisp-mail-http", daemon=True)
+    thread.start()
+    log(f"mail 127.0.0.1:{MAIL_PORT}")
 
 
 def write_accept_file(text, item_id):
@@ -1471,10 +1742,16 @@ def run_form():
             if pet.accept_latched:
                 suggest_state.pending = False
                 return
-            if suggest_state.prune_blocked(payload.get("item_id") or "", time.time()):
+            blocked = (
+                not suggest_state.mail_insert
+                and suggest_state.prune_blocked(payload.get("item_id") or "", time.time())
+            )
+            if blocked:
                 suggest_state.pending = False
                 return
             already = suggest_state.open
+            was_reading = suggest_state.reading
+            suggest_state.reading = False
             suggest_state.pending = False
             suggest_state.open = True
             suggest_state.summary = payload.get("summary") or ""
@@ -1485,12 +1762,22 @@ def run_form():
             quote = suggest_state.quote
             source = suggest_state.source
             item_id = suggest_state.item_id
-        if already and pet.card_open:
-            message = json.dumps(
-                {"summary": summary, "quote": quote, "source": source, "item_id": item_id}
-            )
-            view.CoreWebView2.ExecuteScriptAsync("weaveSuggestReplace(" + message + ")")
-            log("card update")
+        message = json.dumps(
+            {"summary": summary, "quote": quote, "source": source, "item_id": item_id}
+        )
+        if was_reading or (already and pet.card_open):
+            if was_reading:
+                pet.card_open = True
+                pet.reveal_at = 0.0
+                pet.close_at = 0.0
+                pet.accept_latched = False
+                set_click_through(False)
+                pet.apply()
+            if view.CoreWebView2 is not None:
+                view.CoreWebView2.ExecuteScriptAsync("weaveSuggestReplace(" + message + ")")
+            if was_reading and not already:
+                play_notice()
+            log("card open" if was_reading and not already else "card update")
             return
         pet.card_open = False
         pet.reveal_at = time.time() + ALERT_FOR
@@ -1518,6 +1805,7 @@ def run_form():
     def close_card():
         with suggest_state.lock:
             suggest_state.open = False
+            suggest_state.reading = False
             if not suggest_state.pending:
                 suggest_state.turn_ended = False
         pet.card_open = False
@@ -1530,6 +1818,48 @@ def run_form():
         pet.apply()
         log("card close")
 
+    def show_reading():
+        if pet.accept_latched:
+            return
+        with suggest_state.lock:
+            if suggest_state.open or suggest_state.pending or suggest_state.reading:
+                return
+            suggest_state.reading = True
+        pet.card_open = True
+        pet.reveal_at = 0.0
+        pet.close_at = 0.0
+        set_click_through(True)
+        pet.apply()
+        if view.CoreWebView2 is not None:
+            script = "weaveSuggestReading(" + json.dumps("Reading the company notes") + ")"
+            view.CoreWebView2.ExecuteScriptAsync(script)
+        log("mail reading")
+
+    def show_mail_miss():
+        if pet.accept_latched:
+            return
+        with suggest_state.lock:
+            suggest_state.reading = True
+            suggest_state.open = False
+        pet.card_open = True
+        pet.reveal_at = 0.0
+        set_click_through(True)
+        pet.apply()
+        if view.CoreWebView2 is not None:
+            script = "weaveSuggestReading(" + json.dumps("Nothing in the company notes matches that") + ")"
+            view.CoreWebView2.ExecuteScriptAsync(script)
+        pet.close_at = time.time() + 2.8
+        log("mail miss")
+
+    def finish_reading():
+        with suggest_state.lock:
+            was = suggest_state.reading
+            suggest_state.reading = False
+            if suggest_state.open or suggest_state.pending:
+                return
+        if was and not pet.accept_latched:
+            close_card()
+
     def drain_cards():
         if not painted["ok"] or view.CoreWebView2 is None:
             return
@@ -1541,6 +1871,15 @@ def run_form():
             if kind == "hide":
                 if not pet.accept_latched:
                     close_card()
+                continue
+            if kind == "reading":
+                show_reading()
+                continue
+            if kind == "mail-done":
+                finish_reading()
+                continue
+            if kind == "mail-miss":
+                show_mail_miss()
                 continue
             if kind == "show":
                 try:
@@ -1561,9 +1900,31 @@ def run_form():
         pet.accept_latched = True
         with suggest_state.lock:
             text = f"{suggest_state.summary}\n{suggest_state.source}: {suggest_state.quote}"
+            summary = " ".join(suggest_state.summary.split())
             item_id = suggest_state.item_id
             ended = suggest_state.turn_ended
+            mail_insert = suggest_state.mail_insert
+            mail_mode = suggest_state.mail_mode or "sentence"
             suggest_state.open = False
+            suggest_state.mail_insert = ""
+            suggest_state.mail_mode = ""
+        if mail_insert:
+            if mail_mode not in ("draft", "sentence"):
+                mail_mode = "sentence"
+            mail_bridge.store_insert(mail_insert, mail_mode)
+            log("accept mail")
+            close_card()
+            return
+        answer = "" if summary.startswith("Weave didn't answer") else summary
+        if answer and draft_watch is not None and draft_watch.replace_sentence(answer):
+            note = "Replaced the sentence with the answer"
+            if view.CoreWebView2 is not None:
+                view.CoreWebView2.ExecuteScriptAsync("weaveSuggestStatus(" + json.dumps(note) + ")")
+            pet.close_at = time.time() + 1.2
+            log("accept replace")
+            return
+        if answer:
+            log("accept replace failed")
         inserted = draft_watch.append(text) if draft_watch is not None else False
         if not inserted and draft_watch is not None and draft_watch.focus():
             copied = copy_clipboard("\n" + text)
@@ -1594,6 +1955,10 @@ def run_form():
         log("accept paste" if pasted else "accept copy")
 
     def on_ignore(data):
+        mail_bridge.clear_insert()
+        with suggest_state.lock:
+            suggest_state.mail_insert = ""
+            suggest_state.mail_mode = ""
         item_id = ""
         if isinstance(data, dict) and data.get("item_id") is not None:
             item_id = str(data.get("item_id"))
@@ -1659,7 +2024,7 @@ def run_form():
 
 
 def _cue_from_answer(card):
-    """Turn an answer card into the pet dialogue. No evidence means no card."""
+    """Turn an answer card into the pet dialogue. No answer means no card."""
 
     def clean(value, limit):
         text = " ".join(str(value or "").replace("\ufeff", "").split())
@@ -1685,7 +2050,7 @@ def _cue_from_answer(card):
     if isinstance(entry, dict):
         quote = clean(entry.get("quote") or entry.get("summary"), 180)
         source = clean(entry.get("source"), 80)
-    if not answer or not item_id:
+    if not answer:
         return {"state": "unsure", "summary": "", "quote": "", "source": "", "item_id": ""}
     return {"state": "found", "summary": answer, "quote": quote, "source": source, "item_id": item_id}
 
@@ -1704,8 +2069,44 @@ def _same_draft(cued, current):
     return len(left) >= 12 and (left[:48] in right or right[:48] in left)
 
 
+def _ask_key(question):
+    return " ".join((question or "").replace("\ufeff", "").split()).casefold()
+
+
+def _route_url(url, path):
+    parts = urlsplit(url or "")
+    if not parts.scheme or not parts.netloc:
+        return "http://127.0.0.1:8765" + path
+    return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+
+
+class AskedQuestions:
+    """Questions already sent to POST /answer. The draft watch and the hook share this."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._keys = set()
+
+    def claim(self, question):
+        key = _ask_key(question)
+        if not key:
+            return False
+        with self._lock:
+            if key in self._keys:
+                return False
+            self._keys.add(key)
+            return True
+
+    def clear(self):
+        with self._lock:
+            self._keys.clear()
+
+
+asked_questions = AskedQuestions()
+
+
 class DraftWatch:
-    """Reads the Cursor chat box and asks for a note before the prompt is sent."""
+    """Reads the Cursor chat box and answers an @bubble question before the prompt is sent."""
 
     def __init__(self):
         self._proc = None
@@ -1714,7 +2115,7 @@ class DraftWatch:
         self._token = ""
         self._cue_url = "http://127.0.0.1:8765/wisp/cue"
         self._missed = False
-        threading.Thread(target=self._warm, name="wisp-warm", daemon=True).start()
+        self._answer_error = ""
         threading.Thread(target=self._loop, name="wisp-draft", daemon=True).start()
 
     def _load_token(self):
@@ -1826,10 +2227,41 @@ class DraftWatch:
         raw = base64.b64encode(text.encode("utf-8")).decode("ascii")
         return self._call("append " + raw, 12) == "set"
 
+    def read_value(self):
+        """The composer value itself, with no mention chip added in front."""
+
+        line = self._call("value", 12)
+        if not line.startswith("b64:"):
+            return ""
+        try:
+            return base64.b64decode(line[4:], validate=True).decode("utf-8")
+        except (ValueError, UnicodeError):
+            return ""
+
+    def replace_sentence(self, answer):
+        """Put the answer where the @bubble sentence was. Leave the other sentences."""
+
+        answer = " ".join((answer or "").split())
+        if not answer:
+            return False
+        if _composer_replace(answer):
+            return True
+        current = self.read_value()
+        updated = replace_bubble_sentence(current, answer) if current else None
+        if not updated:
+            return False
+        raw = base64.b64encode(updated.encode("utf-8")).decode("ascii")
+        return self._call("set " + raw, 12) == "set"
+
+    def _fail(self, reason):
+        self._answer_error = reason
+        return None
+
     def _post_json(self, url, payload, timeout):
+        self._answer_error = ""
         token = self._load_token()
         if not token:
-            return None
+            return self._fail("no-token")
         request = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
@@ -1839,24 +2271,101 @@ class DraftWatch:
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 data = json.loads(response.read().decode("utf-8"))
-        except (OSError, urllib.error.URLError, UnicodeError, json.JSONDecodeError, TimeoutError):
-            return None
-        return data if isinstance(data, dict) else None
+        except urllib.error.HTTPError as exc:
+            return self._fail(f"http {exc.code}")
+        except TimeoutError:
+            return self._fail("timeout")
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, TimeoutError):
+                return self._fail("timeout")
+            return self._fail("unreachable")
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return self._fail("bad-response")
+        if not isinstance(data, dict):
+            return self._fail("bad-response")
+        return data
 
-    def fast_cue(self, prompt, timeout=2):
-        """Stored excerpt for the card. The caller is not waiting on a model."""
-        return self._post_json(self._cue_url, {"prompt": prompt}, timeout)
+    def _answer_url(self):
+        self._load_token()
+        return _route_url(self._cue_url, "/answer")
 
-    def _warm(self):
+    def _consider(self, text):
+        """Ask only when this stable draft addresses @bubble. Anything else is ignored."""
+
+        if bubble_question(text) is None:
+            return
+        self.submit(text)
+
+    def submit(self, text, *, duplicate_log=False):
+        """Send the question unless this pet already sent it."""
+
+        question = bubble_question(text)
+        if not question:
+            question = " ".join((text or "").replace("\ufeff", "").split())
+        if not question or len(question) > MAX_QUESTION:
+            return False
+        if not asked_questions.claim(question):
+            if duplicate_log:
+                log("ask duplicate")
+            return False
+        threading.Thread(
+            target=self._fetch_and_show, args=(question,), name="wisp-ask", daemon=True,
+        ).start()
+        return True
+
+    def _reply_current(self, question):
+        """False only when the box now holds a different @bubble question.
+
+        Submitting clears the box, and a mention chip can drop the token from
+        the accessibility value. Both still belong to the ask already sent.
+        """
+
+        current = self.read()
+        if not current:
+            return True
+        asked = bubble_question(current)
+        if asked is None:
+            return True
+        return _ask_key(asked) == _ask_key(question)
+
+    def _offer_failure(self):
+        """A visible card when the agent does not answer. An open card stays."""
+
+        reason = self._answer_error or "error"
+        with suggest_state.lock:
+            if suggest_state.open or suggest_state.pending:
+                return
+        summary = "Weave didn't answer in time." if reason == "timeout" else "Weave didn't answer."
+        offer_suggestion({
+            "state": "found",
+            "summary": summary,
+            "quote": "",
+            "source": "",
+            "item_id": "",
+        })
+
+    def _fetch_and_show(self, question):
+        log("ask sent")
         started = time.perf_counter()
-        self.fast_cue("weave", timeout=12)
-        log(f"draft warm {int((time.perf_counter() - started) * 1000)}")
+        card = self._post_json(self._answer_url(), {"question": question}, ANSWER_TIMEOUT)
+        elapsed = int((time.perf_counter() - started) * 1000)
+        if not self._reply_current(question):
+            log(f"draft dropped {elapsed}")
+            return
+        if not isinstance(card, dict):
+            log(f"draft down {elapsed} {self._answer_error or 'error'}")
+            self._offer_failure()
+            return
+        cue = _cue_from_answer(card)
+        if cue.get("state") == "found" and offer_suggestion(cue):
+            log(f"draft shown {elapsed}")
+            return
+        log(f"draft unsure {elapsed}")
 
     def _loop(self):
         log("draft watch")
         last = None
         stable_since = 0.0
-        last_cued = None
         while True:
             text = self.read()
             now = time.time()
@@ -1868,44 +2377,118 @@ class DraftWatch:
                 stable_since = now
                 time.sleep(0.1)
                 continue
-            if now - stable_since < 0.2:
+            if now - stable_since < ASK_SETTLE:
                 time.sleep(0.1)
                 continue
-            cleaned = text.replace("\ufeff", "").strip()
-            if len(cleaned) < 12 or len(cleaned) > 1500:
-                if len(cleaned) < 12:
-                    retire_suggestion()
-                time.sleep(0.3)
-                continue
-            if cleaned == last_cued:
-                time.sleep(0.3)
-                continue
-            last_cued = cleaned
-            started = time.perf_counter()
-            quick = self.fast_cue(cleaned)
-            elapsed = int((time.perf_counter() - started) * 1000)
-            current = self.read()
-            if current is None or " ".join(current.replace("\ufeff", "").split()) != " ".join(cleaned.split()):
-                last_cued = None
-                continue
-            if quick is None:
-                log(f"draft down {elapsed}")
-                continue
-            related = quick.get("state") == "found" and _related(cleaned, quick.get("quote"))
-            if related and offer_suggestion(quick):
-                log(f"draft shown {elapsed}")
-            else:
-                retire_suggestion()
-                log(f"draft unsure {elapsed}")
-            time.sleep(0.1)
+            self._consider(text)
+            time.sleep(0.3)
+
+
+def _node_bin():
+    found = shutil.which("node")
+    if found:
+        return found
+    candidate = Path(r"C:\Program Files\nodejs\node.exe")
+    if candidate.is_file():
+        return str(candidate)
+    return ""
+
+
+def _cursor_main_pids():
+    try:
+        out = subprocess.check_output(
+            [
+                "powershell.exe", "-NoProfile", "-Command",
+                "Get-Process -Name Cursor -ErrorAction SilentlyContinue | "
+                "Where-Object { $_.MainWindowHandle -ne 0 } | "
+                "Select-Object -ExpandProperty Id",
+            ],
+            text=True,
+            timeout=12,
+            creationflags=0x08000000,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pids = []
+    for line in out.splitlines():
+        stripped = line.strip()
+        if stripped.isdigit():
+            pids.append(int(stripped))
+    return pids
+
+
+def _tint_host(pid, mode, payload=""):
+    node = _node_bin()
+    host = HERE / "bubble_tint_host.js"
+    script = HERE / "bubble_tint.js"
+    if not node or not host.is_file() or not script.is_file():
+        return {"ok": False}
+    command = [node, str(host), str(pid), str(script)]
+    if mode:
+        command.append(mode)
+    if payload:
+        command.append(payload)
+    try:
+        proc = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            creationflags=0x08000000,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {"ok": False}
+    lines = [line for line in (proc.stdout or "").splitlines() if line.strip()]
+    if not lines:
+        return {"ok": False}
+    try:
+        data = json.loads(lines[-1])
+    except json.JSONDecodeError:
+        return {"ok": False}
+    return data if isinstance(data, dict) else {"ok": False}
+
+
+def _composer_replace(answer):
+    """Replace the @bubble sentence in the live composer. False when it is not there."""
+
+    raw = base64.b64encode(answer.encode("utf-8")).decode("ascii")
+    for pid in _cursor_main_pids():
+        result = _tint_host(pid, "replace", raw)
+        if result.get("ok"):
+            return True
+    return False
+
+
+def _bubble_tint_loop():
+    """Keep the @bubble token purple in the composer. The draft text is untouched."""
+
+    announced = None
+    while True:
+        status = "miss"
+        for pid in _cursor_main_pids():
+            result = _tint_host(pid, "")
+            if result.get("ok") and result.get("color") == "#7C3AED":
+                status = "on"
+                break
+        if status != announced:
+            log("tint " + status)
+            announced = status
+        time.sleep(8)
+
+
+def stop_bubble_tint():
+    for pid in _cursor_main_pids():
+        _tint_host(pid, "close")
 
 
 def main():
     global draft_watch
     own_the_process()
     log("started")
-    start_suggest_server()
     draft_watch = DraftWatch()
+    threading.Thread(target=_bubble_tint_loop, name="wisp-tint", daemon=True).start()
+    start_suggest_server()
+    start_mail_server()
     try:
         import clr
         from System.Threading import ApartmentState, Thread, ThreadStart
@@ -1915,6 +2498,7 @@ def main():
         thread.Start()
         thread.Join()
     finally:
+        stop_bubble_tint()
         cleanup_port()
 
 

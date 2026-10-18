@@ -16,6 +16,7 @@ the server first; a failed query drops the connection from the pool.
 
 import os
 import threading
+import time
 from typing import Any
 
 APP_ROLE = "weave_app"
@@ -79,6 +80,55 @@ def _dsn(direct: bool) -> str:
     return os.environ["DATABASE_URL"]
 
 
+class _ConnPool:
+    """Idle TLS sessions for the psycopg2 fallback. A checkout must not dial Neon again."""
+
+    def __init__(self, dsn: str, *, max_size: int, connect):
+        self._dsn = dsn
+        self._max = max_size
+        self._connect = connect
+        self._idle: list = []
+        self._size = 0
+        self._cond = threading.Condition()
+
+    def getconn(self):
+        deadline = time.monotonic() + _CHECKOUT_TIMEOUT
+        with self._cond:
+            while True:
+                while self._idle:
+                    conn = self._idle.pop()
+                    if not getattr(conn, "closed", 1):
+                        return conn
+                    self._size -= 1
+                if self._size < self._max:
+                    self._size += 1
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not self._cond.wait(remaining):
+                    raise TimeoutError("postgres pool checkout timed out")
+        try:
+            return self._connect(self._dsn)
+        except Exception:
+            with self._cond:
+                self._size -= 1
+                self._cond.notify()
+            raise
+
+    def putconn(self, conn) -> None:
+        with self._cond:
+            if getattr(conn, "closed", 1):
+                self._size = max(0, self._size - 1)
+            elif len(self._idle) < self._max:
+                self._idle.append(conn)
+            else:
+                self._size = max(0, self._size - 1)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._cond.notify()
+
+
 def _pool(direct: bool):
     global _QUERY_POOL, _DIRECT_POOL
     with _POOL_LOCK:
@@ -89,7 +139,7 @@ def _pool(direct: bool):
                 _DIRECT_POOL = ConnectionPool(
                     _dsn(True),
                     open=True,
-                    min_size=0,
+                    min_size=1,
                     max_size=2,
                     timeout=_CHECKOUT_TIMEOUT,
                     kwargs=_POOL_KWARGS,
@@ -101,12 +151,27 @@ def _pool(direct: bool):
             _QUERY_POOL = ConnectionPool(
                 _dsn(False),
                 open=True,
-                min_size=0,
+                min_size=1,
                 max_size=8,
                 timeout=_CHECKOUT_TIMEOUT,
                 kwargs=_POOL_KWARGS,
             )
         return _QUERY_POOL
+
+
+def _psycopg2_pool(direct: bool):
+    global _QUERY_POOL, _DIRECT_POOL
+    import psycopg2
+
+    with _POOL_LOCK:
+        pool = _DIRECT_POOL if direct else _QUERY_POOL
+        if pool is None:
+            pool = _ConnPool(_dsn(direct), max_size=2 if direct else 8, connect=psycopg2.connect)
+            if direct:
+                _DIRECT_POOL = pool
+            else:
+                _QUERY_POOL = pool
+        return pool
 
 
 def warm_pg() -> None:
@@ -131,11 +196,10 @@ def connect_pg(*, direct: bool = False, url: str | None = None):
         return psycopg.connect(url, **_POOL_KWARGS)
 
     try:
-        import psycopg
+        import psycopg  # noqa: F401
     except ImportError:
-        import psycopg2
-
-        return psycopg2.connect(_dsn(direct))
+        pool = _psycopg2_pool(direct)
+        return _PooledConn(pool.getconn(), pool)
 
     raw = _pool(direct).getconn()
     return _PooledConn(raw, _pool(direct))

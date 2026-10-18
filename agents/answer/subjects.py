@@ -16,6 +16,12 @@ from shared.schema import Label, Prop
 MATCH_LABELS = (Label.TOPIC, Label.PROJECT, Label.CUSTOMER, Label.DEAL, Label.PERSON)
 _NON_WORD = re.compile(r"[^a-z0-9]+")
 _MIN_FIRST_WORD = 4
+# Three-letter names such as "SSO" still count. Ordinary words do not.
+_SHORT_STOP = frozenset({
+    "the", "and", "for", "who", "how", "why", "what", "when", "with", "from",
+    "this", "that", "your", "our", "are", "was", "not", "but", "can", "you",
+    "its", "any", "all", "has", "had", "his", "her", "she", "him", "did",
+})
 
 
 @dataclass(frozen=True)
@@ -52,7 +58,7 @@ def match_subjects(ctx: ToolContext, question: str) -> list[Match]:
                 candidates.append((phrase, node_id, name, label))
         first = normalize(name).split(" ")[0]
         minimum = 3 if label == Label.PERSON else _MIN_FIRST_WORD
-        if len(first) >= minimum:
+        if len(first) >= minimum or (len(first) == 3 and first not in _SHORT_STOP):
             first_words.setdefault(first, []).append((node_id, name, label))
 
     taken: list[tuple[int, int]] = []

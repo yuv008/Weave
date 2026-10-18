@@ -10,6 +10,7 @@ Persistence failures are logged and never cost the caller the answer.
 """
 
 import logging
+import threading
 import time
 import uuid
 
@@ -46,7 +47,7 @@ class AnswerAgent:
     def answer(self, principal: Principal, question: str, *, conversation_id: str | None = None,
                request_id: str | None = None, intent: Intent | str | None = None,
                subject_ids: list[str] | None = None, fact_ids: list[str] | None = None,
-               ensure_conversation: bool = False) -> AnswerCard:
+               ensure_conversation: bool = False, persist: bool = True) -> AnswerCard:
         """Answer ``question`` as ``principal``.
 
         Internal callers (the watcher handoff) may fix the ``intent`` (the
@@ -102,15 +103,30 @@ class AnswerAgent:
         card = build_card(state, claims, dropped, self.runtime.cfg)
         card.request_id = request_id
         outcome = "ok" if claims or card.proposal else "empty"
+        if not persist and (private or shared) and not conversation_id:
+            conversation_id = new_id("conv")
 
-        if private:
-            card.conversation_id, card.episode_id = self._remember(ctx, state, card, conversation_id, episode_id,
-                                                                   outcome)
-        elif shared:
-            card.conversation_id, card.episode_id = self._remember_channel(
-                ctx, state, card, conversation_id, episode_id, outcome, channel,
-            )
-        self._audit(principal, state, card, outcome, request_id, started)
+        def _save() -> None:
+            if private:
+                card.conversation_id, card.episode_id = self._remember(
+                    ctx, state, card, conversation_id, episode_id, outcome,
+                )
+            elif shared:
+                card.conversation_id, card.episode_id = self._remember_channel(
+                    ctx, state, card, conversation_id, episode_id, outcome, channel,
+                )
+            self._audit(principal, state, card, outcome, request_id, started)
+
+        if persist:
+            _save()
+            return card
+        if private or shared:
+            card.episode_id = episode_id
+            card.conversation_id = conversation_id
+        frozen = card.public()
+        card.public = lambda: frozen
+        self._persist_thread = threading.Thread(target=_save, name="answer-persist", daemon=True)
+        self._persist_thread.start()
         return card
 
     def _remember(self, ctx, state: RunState, card: AnswerCard, conversation_id, episode_id, outcome):

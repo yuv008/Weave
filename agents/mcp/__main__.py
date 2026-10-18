@@ -1,4 +1,4 @@
-"""Run the agent server: MCP at /mcp, the answer API at /answer and /actions/{id}/confirm, POST /wisp/cue, and GET /ops.
+"""Run the agent server: MCP at /mcp, the answer API at /answer and /actions/{id}/confirm, POST /wisp/cue, POST /wisp/mail, and GET /ops.
 
 Usage: python -m agents.mcp [--host 127.0.0.1] [--port 8765]
 

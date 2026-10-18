@@ -43,6 +43,7 @@ class Router(Protocol):
 _RULES: tuple[tuple[Intent, re.Pattern], ...] = tuple(
     (intent, re.compile(pattern, re.IGNORECASE))
     for intent, pattern in (
+        (Intent.LOOKUP, r"\b(api key|openai key|current profit|profit is|grown from|earlier profit)\b"),
         (Intent.DRAFT, r"\b(draft|compose|write (an?|the) (email|note|update|message)|email|status update"
                        r"|notify|let \w+ know|tell \w+ (about|that))\b"),
         (Intent.IMPACT, r"\b(affect(s|ed)?|impact(s|ed)?|depends? on|dependen\w*|blocked|blocking|blocks"

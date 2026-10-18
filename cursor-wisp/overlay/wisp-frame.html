@@ -857,6 +857,16 @@
     if (actions) actions.hidden = true;
     if (summary) summary.textContent = text || "";
   }
+  function weaveSuggestReading(text) {
+    suggestion = null;
+    cardOpen = true;
+    const card = document.getElementById("suggest");
+    if (card) card.hidden = false;
+    weaveSuggestStatus(text || "Reading the company notes");
+    hideAlert();
+    applyPetState();
+    reportInk();
+  }
   function weaveSuggestClose() {
     cardOpen = false;
     suggestion = null;
@@ -940,6 +950,7 @@
   window.weaveSuggestReplace = weaveSuggestReplace;
   window.weaveSuggestReveal = weaveSuggestReveal;
   window.weaveSuggestStatus = weaveSuggestStatus;
+  window.weaveSuggestReading = weaveSuggestReading;
   window.weaveSuggestClose = weaveSuggestClose;
   const acceptBtn = document.getElementById("suggest-accept");
   const ignoreBtn = document.getElementById("suggest-ignore");

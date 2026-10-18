@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock
 
-from shared.pg import _PooledConn, connect_pg
+from shared.pg import _ConnPool, _PooledConn, connect_pg
 
 
 class _FakePool:
@@ -46,6 +46,24 @@ def test_pooled_close_returns_connection_when_rollback_fails():
     wrapped = _PooledConn(inner, pool)
     wrapped.close()
     assert pool.puts == [inner]
+
+
+def test_fallback_pool_reuses_an_open_connection():
+    opened = []
+
+    def connect(dsn):
+        conn = _FakeConn()
+        opened.append((dsn, conn))
+        return conn
+
+    pool = _ConnPool("postgresql://test/db", max_size=2, connect=connect)
+    first = _PooledConn(pool.getconn(), pool)
+    first.close()
+    second = _PooledConn(pool.getconn(), pool)
+    second.close()
+    assert len(opened) == 1
+    assert opened[0][0] == "postgresql://test/db"
+    assert opened[0][1].rollback_calls == 2
 
 
 def test_connect_pg_with_url_bypasses_pool(monkeypatch):

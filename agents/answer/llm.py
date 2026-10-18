@@ -13,6 +13,7 @@ the tests and does not take a slot.
 
 import json
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -24,7 +25,7 @@ from typing import Protocol
 from agents.answer.composer import Claim, TemplateComposer
 from agents.answer.intents import ALLOWED, Intent, Route, RuleRouter
 from agents.answer.loop import Finish, RunState, ToolCall
-from agents.answer.planner import RulePlanner
+from agents.answer.planner import RulePlanner, blank_search
 from agents.mcp.schema import description, input_schema
 from agents.tools.base import REGISTRY
 from shared.config import WeaveConfig
@@ -71,11 +72,35 @@ PLANNER_PROMPT = (
 )
 
 COMPOSER_PROMPT = (
-    "Write the answer as short claims. Every claim must list the evidence ids that support it, taken from the "
-    "tool results' citations (item_id or projection_id), or 'path:src|rel|dst' for an edge in a result's path "
-    "(for structural facts such as ownership). A restricted citation is an approved summary: state it "
-    "without quoting. Do not state anything the results do not support. Reply with JSON."
+    "Write one or two sentences that answer the question. State the fact. Do not name the author, the source, "
+    "the channel, or the date, and do not wrap the fact in quotation marks. Every claim must list the evidence "
+    "ids that support it, taken from the tool results' citations (item_id or projection_id), or "
+    "'path:src|rel|dst' for an edge in a result's path (for structural facts such as ownership). A restricted "
+    "citation is an approved summary: state it without quoting. Do not state anything the results do not "
+    "support. Reply with JSON."
 )
+
+ANSWER_SCHEMA = {
+    "type": "object",
+    "properties": {"answer": {"type": "string"}},
+    "required": ["answer"],
+    "additionalProperties": False,
+}
+
+# The search template writes "Name in source on Mon D, YYYY: \"quote\"". That is a citation, not the answer.
+_MONEY = re.compile(r"\$\d+(?:\.\d+)?[KMB]\b")
+_CITATION = re.compile(
+    r"^.+ in .+ on [A-Z][a-z]{2,8} \d{1,2}, \d{4}: \"(?P<quote>.*)\"$",
+    re.DOTALL,
+)
+
+
+def _citation_quote(text: str) -> str | None:
+    match = _CITATION.match(" ".join((text or "").split()))
+    if match is None:
+        return None
+    quote = " ".join(match.group("quote").split())
+    return quote or None
 
 
 @dataclass(frozen=True)
@@ -127,6 +152,9 @@ class LLMRouter:
         self.fallback = fallback or RuleRouter()
 
     def route(self, question: str) -> Route:
+        ruled = self.fallback.route(question)
+        if ruled.reason != "no rule matched":
+            return ruled
         try:
             reply = self.llm.complete(
                 [{"role": "system", "content": ROUTER_PROMPT}, {"role": "user", "content": question}],
@@ -134,7 +162,7 @@ class LLMRouter:
             )
             return Route(Intent((reply.data or {})["intent"]), "llm")
         except Exception:
-            return self.fallback.route(question)
+            return ruled
 
 
 def _result_text(result, cfg: WeaveConfig) -> str:
@@ -198,12 +226,68 @@ class LLMComposer:
             raw = (reply.data or {})["claims"]
             claims = [Claim(str(c["text"]), [str(e) for e in c["evidence_ids"]], "llm") for c in raw]
         except Exception:
-            return self.fallback.compose(state)
+            claims = self.fallback.compose(state)
+        else:
+            try:
+                known = TemplateComposer().compose(state)
+            except Exception:
+                known = []
+            claims = [self._enrich(c, known) for c in claims]
+        return self._stated_as_answer(state, claims)
+
+    def _stated_as_answer(self, state: RunState, claims: list[Claim]) -> list[Claim]:
+        """A search hit is stored as a citation. The sentence that replaces the prompt is the fact."""
+
+        citations = [claim for claim in claims if _citation_quote(claim.text) is not None]
+        if not citations:
+            return claims
+        sentence = self._answer_sentence(state, citations)
+        if not sentence:
+            sentence = " ".join(quote for quote in (_citation_quote(claim.text) for claim in citations) if quote)
+        sentence = " ".join(sentence.split())
+        if not sentence:
+            return claims
+        evidence = list(dict.fromkeys(item for claim in citations for item in claim.evidence_ids))
+        rest = [claim for claim in claims if _citation_quote(claim.text) is None]
+        return [Claim(sentence, evidence, "llm"), *rest]
+
+    def _answer_sentence(self, state: RunState, citations: list[Claim]) -> str:
+        notes = []
+        for claim in citations:
+            quote = _citation_quote(claim.text) or claim.text
+            notes.append(f"{', '.join(claim.evidence_ids)}: {quote}")
+        blank = blank_search(state.question) is not None
+        if blank:
+            system = (
+                "The question is a blank in a sentence. Reply with only the missing value from the notes, "
+                "such as $2.4M. Do not write a sentence. Do not name the author, the source, or the date. "
+                "Reply with JSON."
+            )
+        else:
+            system = (
+                "Answer the question in one or two sentences using only these notes. "
+                "State the fact the question asks for. Do not name the author, the source, or the date. "
+                "Do not use quotation marks. Leave out labels that only say the note is a test. "
+                "Reply with JSON."
+            )
         try:
-            known = TemplateComposer().compose(state)
+            reply = self.llm.complete(
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": state.question + "\n\n" + "\n".join(notes)},
+                ],
+                json_schema=ANSWER_SCHEMA,
+            )
         except Exception:
-            known = []
-        return [self._enrich(c, known) for c in claims]
+            return ""
+        text = str((reply.data or {}).get("answer") or "").strip()
+        if not text or _citation_quote(text) is not None:
+            return ""
+        if blank:
+            amounts = _MONEY.findall(text)
+            if len(amounts) == 1:
+                return amounts[0]
+        return text
 
     @staticmethod
     def _enrich(claim: Claim, known: list[Claim]) -> Claim:
@@ -367,4 +451,7 @@ def build_components(cfg: WeaveConfig, llm: LLM | None = None):
             llm = GroqLLM.from_config(cfg)
         else:
             raise NotImplementedError(f"no adapter for LLM provider {provider!r}; use groq or none")
+        # The playbook picks the tools. The model writes the sentence; a citation-shaped
+        # search hit is rewritten into the fact before it can be pasted into the prompt.
+        return LLMRouter(llm), RulePlanner(), LLMComposer(llm, cfg)
     return LLMRouter(llm), LLMPlanner(llm, cfg), LLMComposer(llm, cfg)

@@ -16,7 +16,7 @@ PLAYBOOKS: list[tuple[str, Intent, list[str]]] = [
     # Provenance: the decision, then its evidence and threads.
     ("default", Intent.PROVENANCE, ["decision", "trace", "search_if_empty"]),
     # Flow 2, a sales status draft: what the deal needs, the decision, the numbers, then the draft.
-    ("sales", Intent.DRAFT, ["dependencies", "decision", "figures", "propose"]),
+    ("sales", Intent.DRAFT, ["dependencies", "decision", "figures", "search_figures", "propose"]),
     # Impact: what rests on a replaced decision, then what depends on the subject.
     ("default", Intent.IMPACT, ["decision", "impact", "dependencies", "search_if_empty"]),
 ]

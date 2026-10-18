@@ -92,6 +92,7 @@ def draft_email(ctx: ToolContext, intent: str, recipient: str, fact_ids: list[st
     visible = visible_claims(ctx, facts)
     projected = projections_for(ctx, facts)
     rows = {row[0]: row for row in ctx.rows(_FACTS, ids=facts)}
+    passages = {c.item_id: c for c in item_citations(ctx, facts)}
     evidence = visible_evidence(ctx, sorted(visible))
 
     result = ToolResult("draft_email", {})
@@ -106,6 +107,12 @@ def draft_email(ctx: ToolContext, intent: str, recipient: str, fact_ids: list[st
         elif fact in projected:
             cites = projected[fact][:1]
             sentence = cites[0].summary
+        elif fact in passages and (passages[fact].quote or "").strip():
+            cite = passages[fact]
+            sentence = " ".join(cite.quote.split())
+            if not sentence.endswith("."):
+                sentence += "."
+            cites = [cite]
         else:
             result.hidden += 1
             continue

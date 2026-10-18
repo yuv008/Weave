@@ -19,6 +19,12 @@ def _json(value) -> str:
     return json.dumps(value, default=str)
 
 
+def _forget_playbooks() -> None:
+    from agents.answer.planner import clear_playbook_cache
+
+    clear_playbook_cache()
+
+
 class ConversationNotFound(LookupError):
     """No such conversation for this caller. Same error whether it exists or not."""
 
@@ -197,6 +203,7 @@ class InMemoryMemoryStore:
             version = max((p["version"] for p in same), default=0) + 1
             self.playbooks.append({"tenant": tenant, "role": role, "intent": intent, "version": version,
                                    "steps": list(steps), "approved_by": approved_by, "active": True})
+        _forget_playbooks()
         return version
 
     def add_task(self, task, *, if_absent=False):
@@ -407,6 +414,7 @@ class PostgresMemoryStore:
             (tenant, role, intent, _json(list(steps)), approved_by, tenant, role, intent),
             fetch="one", tenant=tenant,
         )
+        _forget_playbooks()
         return row[0]
 
     def add_task(self, task, *, if_absent=False):

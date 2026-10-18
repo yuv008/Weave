@@ -12,9 +12,9 @@ from agents.answer import loop as loop_module
 from agents.answer.agent import AnswerAgent, build_agent
 from agents.answer.composer import Claim, TemplateComposer
 from agents.answer.intents import ALLOWED, Intent, RuleRouter
-from agents.answer.llm import LLMComposer, LLMPlanner, LLMReply, LLMRouter, LLMToolCall, ScriptedLLM, build_components
+from agents.answer.llm import LLMComposer, LLMReply, LLMRouter, LLMToolCall, ScriptedLLM, build_components
 from agents.answer.loop import Finish, RunState, ToolCall, run_loop
-from agents.answer.planner import DEFAULT_PLAYBOOKS, RulePlanner, playbook_for
+from agents.answer.planner import DEFAULT_PLAYBOOKS, RulePlanner, blank_search, fact_ids, playbook_for
 from agents.answer.subjects import match_subjects
 from agents.answer.validator import validate
 from agents.gate.principal import Surface
@@ -60,6 +60,53 @@ def state_for(env, who, question, intent):
     state = RunState(question, intent, p, subjects=match_subjects(ctx, question))
     state.known_ids.update(m.id for m in state.subjects)
     return ctx, state
+
+
+def test_an_api_key_question_stays_a_lookup():
+    route = RuleRouter().route("rn we are using the open ai api key can you change it to")
+    assert route.intent == Intent.LOOKUP
+    assert route.reason != "no rule matched"
+
+
+def test_email_blanks_stay_lookups_and_a_budget_draft_searches():
+    profit = RuleRouter().route("hey, as per discussed the profit is")
+    earlier = RuleRouter().route("it has grown from")
+    draft = RuleRouter().route("can you draft email about the budget and sales")
+    assert profit.intent == earlier.intent == Intent.LOOKUP
+    assert profit.reason != "no rule matched" and earlier.reason != "no rule matched"
+    assert draft.intent == Intent.DRAFT
+    assert blank_search("hey, as per discussed the profit is") == {
+        "query": "discussed profit", "system": "slack", "limit": 4,
+    }
+    assert blank_search("it has grown from") == {"query": "grown", "system": "slack", "limit": 4}
+    assert blank_search("can you draft email about the budget and sales") is None
+    assert DEFAULT_PLAYBOOKS[Intent.DRAFT][-2:] == ["search_figures", "propose"]
+
+
+def test_budget_and_sales_draft_uses_the_slack_figures(env):
+    state = RunState("can you draft email about the budget and sales", Intent.DRAFT, principal(env, "sam"))
+    state.subjects = []
+    state.playbook = ["search_figures", "propose"]
+    planner = RulePlanner()
+    search = planner.next_step(state)
+    assert isinstance(search, ToolCall)
+    assert search.tool == "search_context"
+    assert search.args == {"query": "budget sales", "system": "slack", "limit": 8}
+    budget = "real:slack:message:demo:budget"
+    sales = "real:slack:message:demo:sales"
+    state.results.append(ToolResult("search_context", {"hits": [
+        {"item_id": budget, "snippet": "The budget is $900K."},
+        {"item_id": sales, "snippet": "The sales are $3.1M."},
+    ]}, node_ids=[budget, sales]))
+    state.known_ids.update([budget, sales])
+    proposed = planner.next_step(state)
+    assert isinstance(proposed, ToolCall) and proposed.tool == "draft_email"
+    assert proposed.args["fact_ids"] == [budget, sales]
+    assert fact_ids(state) == [budget, sales]
+    skipped = RunState("email the sales team this quarter's profit margin", Intent.DRAFT, state.principal)
+    skipped.subjects = []
+    skipped.playbook = ["search_figures", "propose"]
+    assert isinstance(RulePlanner().next_step(skipped), Finish)
 
 
 def test_the_question_set_has_fifteen_questions_over_every_intent():
@@ -265,7 +312,38 @@ def test_groq_adapter_parses_tools_and_json_and_none_stays_rule_based(monkeypatc
     assert seen["auth"] == "Bearer gsk-test" and seen["agent"] == "weave-agent" and "gsk-test" not in seen["body"]
     assert "gsk-test" not in repr(groq)
     router, planner, composer = build_components(load_config())
-    assert isinstance(router, LLMRouter) and isinstance(planner, LLMPlanner) and isinstance(composer, LLMComposer)
+    assert isinstance(router, LLMRouter) and isinstance(planner, RulePlanner) and isinstance(composer, LLMComposer)
+
+
+def test_citation_shaped_search_hits_become_the_answer(env):
+    _, state = state_for(env, "sam", "where are the Acme pilot kickoff notes", Intent.PROVENANCE)
+    state.results.append(ToolResult("search_context", {"hits": [{
+        "item_id": ITEM,
+        "author": "Yuvraj Sanghai",
+        "source": "social",
+        "at": "2026-10-17T12:00:00Z",
+        "snippet": "Acme pilot kickoff notes are in Drive and Notion. Next step is the weekly check-in.",
+    }]}))
+    scripted = ScriptedLLM([
+        LLMReply(),
+        LLMReply(data={"answer": "The notes are in Drive and Notion. The next step is the weekly check-in."}),
+    ])
+    claims = LLMComposer(scripted, env.runtime.cfg).compose(state)
+    assert [claim.text for claim in claims] == [
+        "The notes are in Drive and Notion. The next step is the weekly check-in.",
+    ]
+    assert claims[0].evidence_ids == [ITEM]
+    assert " in social on " not in claims[0].text
+
+
+def test_a_direct_claim_is_not_rewritten(env):
+    _, state = state_for(env, "sam", "Which SSO provider?", Intent.LOOKUP)
+    scripted = ScriptedLLM([
+        LLMReply(data={"claims": [{"text": "Use Provider B for SSO.", "evidence_ids": [ITEM]}]}),
+    ])
+    claims = LLMComposer(scripted, env.runtime.cfg).compose(state)
+    assert [claim.text for claim in claims] == ["Use Provider B for SSO."]
+    assert len(scripted.requests) == 1
 
 
 def test_groq_bucket_waits_out_a_burst_over_rpm(monkeypatch):
@@ -336,8 +414,15 @@ def test_playbooks_fall_back_to_defaults_and_prefer_the_role(env):
 
 def _client(env):
     env.store.add_token("tok-sam", env.fx.ids["sam"])
-    app = build_app(env.runtime, agent=build_agent(env.runtime))
+    env.agent = build_agent(env.runtime)
+    app = build_app(env.runtime, agent=env.agent)
     return TestClient(app, base_url="http://127.0.0.1:8765")
+
+
+def _wait_persist(env):
+    thread = getattr(env.agent, "_persist_thread", None)
+    if thread is not None:
+        thread.join(2)
 
 
 def test_answer_route_needs_a_token_and_a_question(env):
@@ -348,9 +433,11 @@ def test_answer_route_needs_a_token_and_a_question(env):
         assert client.post("/answer", content=b"not json", headers=auth).status_code == 400
         assert client.post("/answer", json={"question": "x" * 2001}, headers=auth).status_code == 400
         response = client.post("/answer", json={"question": "Which SSO provider should I use?"}, headers=auth)
+        _wait_persist(env)
         assert response.status_code == 200 and response.json()["intent"] == "lookup"
         conv = response.json()["conversation_id"]
         follow = client.post("/answer", json={"question": "And why?", "conversation_id": conv}, headers=auth)
+        _wait_persist(env)
         assert follow.status_code == 200 and follow.json()["conversation_id"] == conv
         missing = client.post("/answer", json={"question": "x", "conversation_id": "conv_nope"}, headers=auth)
         assert missing.status_code == 404

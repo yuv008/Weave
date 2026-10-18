@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Weave Wisp Gmail",
+  "version": "1.0.0",
+  "description": "Reads an open Gmail compose box for the Weave pet when the message contains @bubble.",
+  "host_permissions": [
+    "https://mail.google.com/*",
+    "http://127.0.0.1:8766/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://mail.google.com/*"],
+      "js": ["mail_tint.js", "content.js"],
+      "css": ["mail.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

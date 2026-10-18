@@ -1,1 +1,1 @@
-"""Wisp cues: one gated hint for a prompt. No answer loop and no model call."""
+"""Wisp routes. Cue is one gated hint and does not call a model. Mail calls the answer model only when a compose body contains @bubble."""

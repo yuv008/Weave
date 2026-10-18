@@ -1,65 +1,31 @@
 """Cursor hook for Weave pet suggestions.
 
-``prompt`` asks the local agent for a cue and, on a found hit, shows it on the pet.
-``stop`` tells the pet the turn ended and submits one accepted note as a follow-up.
+``prompt`` returns immediately. A normal prompt is left alone. An ``@bubble`` ask is
+forwarded to the pet, which answers on its own card. ``stop`` tells the pet the turn
+ended and submits one accepted note as a follow-up.
 
-The hook always exits 0. A missing token, a down agent, or a missing pet never blocks the prompt.
+The hook always exits 0. A missing pet never blocks the prompt.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-PORT_FILE = REPO / "cursor-wisp" / "desktop" / "wisp.port"
-ACCEPT_FILE = REPO / "cursor-wisp" / "desktop" / "wisp-accept.json"
-DEFAULT_AGENT_URL = "http://127.0.0.1:8765"
-CUE_TIMEOUT = 18
+DESKTOP = REPO / "cursor-wisp" / "desktop"
+if str(DESKTOP) not in sys.path:
+    sys.path.insert(0, str(DESKTOP))
+from bubble import bubble_question
+
+PORT_FILE = DESKTOP / "wisp.port"
+ACCEPT_FILE = DESKTOP / "wisp-accept.json"
 PET_TIMEOUT = 2
 MAX_PROMPT = 1500
-LOG = REPO / "cursor-wisp" / "desktop" / "pet.log"
-
-
-def load_env_file(path: Path) -> None:
-    """Load one env file. Existing process values win, matching ``shared.env.load_env``."""
-    if not path.is_file():
-        return
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
-def load_repo_env() -> None:
-    """``.env.local`` then ``.env``, then ``.env.tokens`` the way ``scripts.tokens`` does."""
-    for name in (".env.local", ".env", ".env.tokens"):
-        load_env_file(REPO / name)
-
-
-def viewer_token() -> str:
-    """Bearer for ``POST /answer``. ``WEAVE_VIEWER_TOKEN`` wins; otherwise the ask.py default."""
-    load_repo_env()
-    for key in ("WEAVE_VIEWER_TOKEN", "WEAVE_TOKEN_SAM"):
-        value = os.environ.get(key, "").strip()
-        if value:
-            return value
-    return ""
-
-
-def agent_url() -> str:
-    configured = os.environ.get("WEAVE_AGENT_URL", "").strip()
-    return (configured or DEFAULT_AGENT_URL).rstrip("/")
+LOG = DESKTOP / "pet.log"
 
 
 def post_json(url: str, payload: dict, timeout: float, token: str = "") -> tuple[int, bytes]:
@@ -99,42 +65,18 @@ def note(message: str) -> None:
         pass
 
 
-def suggest(prompt: str) -> None:
-    token = viewer_token()
-    if not token:
-        note("cue no-token")
-        return
-    try:
-        status, body = post_json(
-            f"{agent_url()}/wisp/cue",
-            {"prompt": prompt[:MAX_PROMPT]},
-            CUE_TIMEOUT,
-            token,
-        )
-    except Exception:
-        note("cue down")
-        return
-    if status != 200:
-        note(f"cue http {status}")
-        return
-    try:
-        cue = json.loads(body.decode("utf-8"))
-    except (UnicodeError, json.JSONDecodeError):
-        note("cue bad-json")
-        return
-    if not isinstance(cue, dict) or cue.get("state") != "found":
-        note("cue unsure")
-        return
+def forward_ask(question: str) -> None:
+    """Hand the question to the pet and return. The model call stays on the pet."""
     port = pet_port()
     if port is None:
-        note("cue no-pet")
+        note("ask no-pet")
         return
     try:
-        post_json(f"http://127.0.0.1:{port}/suggestion", cue, PET_TIMEOUT)
+        post_json(f"http://127.0.0.1:{port}/ask", {"question": question}, PET_TIMEOUT)
     except Exception:
-        note("cue pet-down")
+        note("ask pet-down")
         return
-    note("cue shown")
+    note("ask forwarded")
 
 
 def turn_ended() -> None:
@@ -188,7 +130,6 @@ def _decode_stdin(raw: bytes) -> str:
 
 def run_prompt() -> dict:
     raw = sys.stdin.buffer.read()
-    note(f"cue stdin {len(raw)}")
     text = _decode_stdin(raw).strip()
     start, end = text.find("{"), text.rfind("}")
     if start >= 0 and end > start:
@@ -196,13 +137,12 @@ def run_prompt() -> dict:
     try:
         data = json.loads(text) if text else {}
     except json.JSONDecodeError:
-        note("cue bad-stdin")
         return {"continue": True}
     prompt = data.get("prompt") if isinstance(data, dict) else None
-    if isinstance(prompt, str) and prompt.strip():
-        suggest(prompt)
-    else:
-        note("cue no-prompt")
+    if isinstance(prompt, str):
+        question = bubble_question(prompt)
+        if question and len(question) <= MAX_PROMPT:
+            forward_ask(question)
     return {"continue": True}
 
 

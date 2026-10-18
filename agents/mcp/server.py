@@ -2,7 +2,7 @@
 
 Every HTTP request except ``GET /ops`` resolves its own principal from
 ``Authorization: Bearer``. Requests under the MCP path use the MCP surface;
-``/answer``, ``/actions/...`` and ``/wisp/cue`` use the web surface. These are private surfaces,
+``/answer``, ``/actions/...``, ``/wisp/cue`` and ``/wisp/mail`` use the web surface. These are private surfaces,
 so the caller is the token's owner. The server runs stateless, so a session can
 never carry an earlier caller's identity. The tenant, and therefore the graph,
 always comes from the token. ``GET /ops`` is outside that auth: it checks
@@ -50,6 +50,7 @@ INSTRUCTIONS = (
 
 MAX_QUESTION_CHARS = 2000
 MAX_CUE_CHARS = 1500
+MAX_MAIL_CHARS = 8000
 
 
 @dataclass(frozen=True)
@@ -140,7 +141,7 @@ class BearerAuth:
             if token is None:
                 raise NotAuthorized()
             cached = None
-            if path == "/wisp/cue":
+            if path in ("/answer", "/wisp/cue", "/wisp/mail"):
                 cached, cue_digest = self._cue_hit(token)
             if cached is not None:
                 principal = cached
@@ -252,7 +253,8 @@ def answer_routes(runtime: Runtime, agent) -> list[Route]:
         try:
             card = await anyio.to_thread.run_sync(
                 lambda: agent.answer(
-                    caller.principal, question.strip(), conversation_id=conversation_id, request_id=caller.request_id
+                    caller.principal, question.strip(), conversation_id=conversation_id,
+                    request_id=caller.request_id, persist=False,
                 )
             )
         except ConversationNotFound:
@@ -313,12 +315,41 @@ def cue_routes(runtime: Runtime) -> list[Route]:
     return [Route("/wisp/cue", wisp_cue, methods=["POST"])]
 
 
+def mail_routes(runtime: Runtime, agent) -> list[Route]:
+    """``POST /wisp/mail`` (web surface). The compose body is model input only."""
+
+    from agents.wisp.mail import mail
+
+    async def wisp_mail(request: Request):
+        caller = _CALLER.get()
+        if caller is None:
+            return PlainTextResponse("not authorized", status_code=401)
+        body = await _json_body(request)
+        if body is None:
+            return PlainTextResponse("body must be a JSON object", status_code=400)
+        to, subject, text = body.get("to"), body.get("subject"), body.get("body")
+        if not isinstance(to, str) or not isinstance(subject, str) or not isinstance(text, str):
+            return PlainTextResponse("to, subject, and body must be strings", status_code=400)
+        if not text.strip() or len(text) > MAX_MAIL_CHARS:
+            return PlainTextResponse(f"body must be 1-{MAX_MAIL_CHARS} characters", status_code=400)
+        try:
+            payload = await anyio.to_thread.run_sync(
+                lambda: mail(agent, runtime, caller.principal, to, subject, text)
+            )
+        except Exception as exc:
+            log.error("mail failed (request %s): %s", caller.request_id, type(exc).__name__)
+            return PlainTextResponse(f"internal error (request {caller.request_id})", status_code=500)
+        return JSONResponse(payload)
+
+    return [Route("/wisp/mail", wisp_mail, methods=["POST"])]
+
+
 def build_app(runtime: Runtime, *, agent=None, host: str = "127.0.0.1", path: str = "/mcp") -> ASGIApp:
     if runtime.resolver is None:
         raise ValueError("the server needs a resolver")
     server = build_server(runtime)
     routes = answer_routes(runtime, agent) if agent is not None else []
-    routes = [*routes, *cue_routes(runtime)]
+    routes = [*routes, *cue_routes(runtime), *mail_routes(runtime, agent)]
     inner = server.streamable_http_app(
         streamable_http_path=path, json_response=True, stateless_http=True, host=host,
         custom_starlette_routes=routes,

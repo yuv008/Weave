@@ -10,6 +10,7 @@ and intent); the built-in defaults below apply when none is stored.
 
 import logging
 import re
+import threading
 from collections.abc import Callable
 
 from agents.answer.intents import Intent
@@ -27,7 +28,7 @@ DEFAULT_PLAYBOOKS: dict[Intent, list[str]] = {
     Intent.PROVENANCE: ["decision", "trace", "search_if_empty"],
     Intent.OWNERSHIP: ["owners", "search_if_empty"],
     Intent.IMPACT: ["decision", "impact", "dependencies", "search_if_empty"],
-    Intent.DRAFT: ["decision", "dependencies", "propose"],
+    Intent.DRAFT: ["decision", "dependencies", "search_figures", "propose"],
 }
 
 FIGURE_WORDS = re.compile(
@@ -36,6 +37,7 @@ FIGURE_WORDS = re.compile(
 NOTIFY_WORDS = re.compile(r"\b(notify|let \w+ know|tell|ping|heads up)\b", re.I)
 MAX_FACTS = 8
 SEARCH_CHARS = 200
+_MONEY = re.compile(r"\$\d+(?:\.\d+)?[KMB]\b")
 
 DECISION_SUBJECTS = (Label.TOPIC, Label.PROJECT, Label.DEAL)
 FIGURE_SUBJECTS = (Label.DEAL, Label.PROJECT, Label.CUSTOMER, Label.TOPIC)
@@ -48,14 +50,35 @@ def role_of(principal: Principal) -> str:
     return (principal.dept or DEFAULT_ROLE).strip().lower() or DEFAULT_ROLE
 
 
+_PLAYBOOKS: dict[tuple, list[str] | None] = {}
+_PLAYBOOKS_LOCK = threading.Lock()
+
+
+def clear_playbook_cache() -> None:
+    with _PLAYBOOKS_LOCK:
+        _PLAYBOOKS.clear()
+
+
+def _cached_playbook(memory, tenant: str, role: str, intent: Intent) -> list[str] | None:
+    key = (id(memory), tenant, role, str(intent))
+    with _PLAYBOOKS_LOCK:
+        if key in _PLAYBOOKS:
+            return _PLAYBOOKS[key]
+    try:
+        loaded = memory.playbook(tenant, role, str(intent))
+    except Exception:
+        log.warning("playbook lookup failed; using the default", exc_info=True)
+        return None
+    steps = list(loaded) if loaded else None
+    with _PLAYBOOKS_LOCK:
+        _PLAYBOOKS.setdefault(key, steps)
+        return _PLAYBOOKS[key]
+
+
 def playbook_for(memory, principal: Principal, intent: Intent) -> list[str]:
     if memory is not None:
         for role in (role_of(principal), DEFAULT_ROLE):
-            try:
-                steps = memory.playbook(principal.tenant, role, str(intent))
-            except Exception:
-                log.warning("playbook lookup failed; using the default", exc_info=True)
-                break
+            steps = _cached_playbook(memory, principal.tenant, role, intent)
             if steps:
                 return list(steps)
     return list(DEFAULT_PLAYBOOKS[intent])
@@ -114,18 +137,65 @@ def _dependencies(state: RunState) -> ToolCall | None:
                     f"{direction} dependencies of {subject.name}")
 
 
+def blank_search(question: str) -> dict | None:
+    """A slack keyword query for one email blank, or None when the question is not one."""
+
+    text = question or ""
+    if re.search(r"\bgrown from\b", text, re.I):
+        return {"query": "grown", "system": "slack", "limit": 4}
+    if re.search(r"\bprofit is\b", text, re.I):
+        return {"query": "discussed profit", "system": "slack", "limit": 4}
+    return None
+
+
+def _budget_and_sales(question: str) -> bool:
+    text = question or ""
+    return bool(re.search(r"\bbudget\b", text, re.I) and re.search(r"\bsales\b", text, re.I))
+
+
 def _search_if_empty(state: RunState) -> ToolCall | None:
     if state.has_facts():
         return None
+    focused = blank_search(state.question)
+    if focused is not None:
+        return ToolCall("search_context", focused, "figure for the blank")
     return ToolCall("search_context", {"query": state.question[:SEARCH_CHARS]}, "no structured facts found")
 
 
+def _search_figures(state: RunState) -> ToolCall | None:
+    """Look up budget and sales passages before a draft that asks for both."""
+
+    if state.intent is not Intent.DRAFT or state.by_tool("search_context"):
+        return None
+    if not _budget_and_sales(state.question):
+        return None
+    return ToolCall(
+        "search_context",
+        {"query": "budget sales", "system": "slack", "limit": 8},
+        "budget and sales for the draft",
+    )
+
+
+def _money_hit(hit: dict, word: str) -> bool:
+    snippet = str(hit.get("snippet") or "")
+    return bool(hit.get("item_id") and re.search(rf"\b{word}\b", snippet, re.I) and _MONEY.search(snippet))
+
+
 def fact_ids(state: RunState) -> list[str]:
-    """Claims a draft may state: seed facts first, then decisions and commitments found, never figures."""
+    """Claims a draft may state: seed facts first, then decisions and commitments found.
+
+    A budget-and-sales draft also states the slack passages that carry those figures.
+    """
 
     ids = [*state.seed_facts, *(d["id"] for d in decisions(state))]
     for r in state.by_tool("get_dependencies"):
         ids += [n["id"] for n in r.data.get("nodes", []) if n.get("label") in (Label.COMMITMENT, Label.DECISION)]
+    if _budget_and_sales(state.question):
+        hits = [h for r in state.by_tool("search_context") for h in (r.data.get("hits") or [])]
+        for word in ("budget", "sales"):
+            hit = next((h for h in hits if _money_hit(h, word)), None)
+            if hit is not None:
+                ids.append(hit["item_id"])
     return list(dict.fromkeys(ids))[:MAX_FACTS]
 
 
@@ -154,6 +224,7 @@ STEPS: dict[str, Callable[[RunState], ToolCall | None]] = {
     "impact": _impact,
     "dependencies": _dependencies,
     "search_if_empty": _search_if_empty,
+    "search_figures": _search_figures,
     "propose": _propose,
 }
 

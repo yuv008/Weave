@@ -57,6 +57,26 @@ class MemorySecretStore:
             row["status"] = status
             row["updated_at"] = datetime.now(UTC)
 
+    def list_grants(self) -> list[dict]:
+        return [
+            {
+                "tenant_id": tenant,
+                "provider": provider,
+                "external_id": row["external_id"],
+                "status": row["status"],
+            }
+            for (tenant, provider), row in self.rows.items()
+            if provider in {"slack", "notion", "google", "github"}
+        ]
+
+    def find_tenant(self, provider: str, external_id: str) -> str | None:
+        if not external_id:
+            return None
+        for (tenant, name), row in self.rows.items():
+            if name == provider and row["external_id"] == external_id and row["status"] != "failed":
+                return tenant
+        return None
+
     def get(self, tenant: str, provider: str) -> dict | None:
         row = self.rows.get((tenant, provider))
         if row is None:
@@ -116,6 +136,46 @@ class PostgresSecretStore:
             conn.commit()
         finally:
             conn.close()
+
+    def list_grants(self) -> list[dict]:
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT tenant_id, provider, external_id, status
+                    FROM connection_secret
+                    WHERE provider IN ('slack', 'notion', 'google', 'github')
+                    """
+                )
+                rows = cur.fetchall()
+            conn.commit()
+        finally:
+            conn.close()
+        return [
+            {"tenant_id": row[0], "provider": row[1], "external_id": row[2] or "", "status": row[3] or ""}
+            for row in rows
+        ]
+
+    def find_tenant(self, provider: str, external_id: str) -> str | None:
+        if not external_id:
+            return None
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT tenant_id FROM connection_secret
+                    WHERE provider = %s AND external_id = %s AND status <> 'failed'
+                    LIMIT 1
+                    """,
+                    (provider, external_id),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        finally:
+            conn.close()
+        return None if row is None else row[0]
 
     def get(self, tenant: str, provider: str) -> dict | None:
         try:

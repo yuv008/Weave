@@ -36,14 +36,14 @@ def slack_ready() -> bool:
     from app.connect.credentials import slack_bot_token, slack_workspace_id
 
     tenant = _env("WEAVE_TENANT_ID") or _env("WEAVE_TENANT")
-    return bool(tenant and slack_bot_token(tenant) and slack_workspace_id(tenant))
+    return bool(tenant and slack_bot_token() and slack_workspace_id())
 
 
 def notion_ready() -> bool:
     from app.connect.credentials import notion_token, notion_workspace_id
 
     tenant = _env("WEAVE_TENANT_ID") or _env("WEAVE_TENANT")
-    return bool(tenant and notion_token(tenant) and notion_workspace_id(tenant))
+    return bool(tenant and notion_token() and notion_workspace_id())
 
 
 def drive_ready() -> bool:
@@ -59,82 +59,166 @@ def github_ready() -> bool:
     return bool(owner and repo and github_access_token())
 
 
+def _grant_tenants(name: str) -> list[str]:
+    provider = "google" if name == "drive" else name
+    try:
+        from app.connect.credentials import current_store
+
+        grants = current_store().list_grants()
+    except Exception:
+        log.exception("could not list connector grants")
+        return []
+    tenants = []
+    for grant in grants:
+        tenant = str(grant.get("tenant_id") or "")
+        if grant.get("provider") != provider or grant.get("status") == "failed":
+            continue
+        if not tenant or tenant == "acme" or not _grant_ready(name, tenant):
+            continue
+        tenants.append(tenant)
+    return tenants
+
+
+def _grant_ready(name: str, tenant: str) -> bool:
+    from app.connect.credentials import (
+        github_access_token,
+        github_coordinates,
+        google_access_token,
+        google_folder_id,
+        notion_token,
+        notion_workspace_id,
+        slack_bot_token,
+        slack_workspace_id,
+    )
+
+    if name == "slack":
+        return bool(slack_bot_token(tenant) and slack_workspace_id(tenant))
+    if name == "notion":
+        return bool(notion_token(tenant) and notion_workspace_id(tenant))
+    if name == "drive":
+        return bool(google_folder_id(tenant) and google_access_token(tenant))
+    if name == "github":
+        owner, repo = github_coordinates(tenant)
+        return bool(owner and repo and github_access_token(tenant))
+    return False
+
+
+def _mark_connected(name: str, tenant: str) -> None:
+    provider = "google" if name == "drive" else name
+    try:
+        from app.connect.credentials import current_store
+
+        current_store().update_status(tenant, provider, "connected")
+    except Exception:
+        log.warning("grant status was not updated")
+
+
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, "").strip() or default
 
 
-def _slack_once() -> None:
+def _slack_once(tenant: str | None = None) -> bool:
     from app.graph.client import connect_graph
-    from app.ingest.worker import backfill_public_channels, retry_failures, slack_client_from_env
+    from app.ingest.worker import backfill_public_channels, retry_failures
+    from app.slack.client import SlackClient
 
-    from app.connect.credentials import slack_workspace_id
+    from app.connect.credentials import slack_bot_token, slack_workspace_id
 
-    client = slack_client_from_env()
-    graph = connect_graph()
+    chosen = tenant or _env("WEAVE_TENANT_ID") or _env("WEAVE_TENANT")
+    token = slack_bot_token(tenant) if tenant else slack_bot_token()
+    workspace = slack_workspace_id(tenant) if tenant else slack_workspace_id()
+    if not chosen or not token or not workspace:
+        return False
+    client = SlackClient(token)
+    graph = connect_graph(tenant=chosen)
     domain = _env("SLACK_WORKSPACE_DOMAIN") or None
     # incremental keeps channels that already finished their backfill.
     backfill_public_channels(
-        _env("WEAVE_TENANT_ID") or _env("WEAVE_TENANT"),
+        chosen,
         _env("WEAVE_CONNECTION_ID", "slack-main"),
-        slack_workspace_id(),
+        workspace,
         client,
         graph,
         workspace_domain=domain,
         incremental=True,
     )
     retry_failures(graph, client, workspace_domain=domain)
+    return True
 
 
-def _notion_once() -> None:
+def _notion_once(tenant: str | None = None) -> bool:
     from app.graph.client import connect_graph
-    from app.notion.client import notion_client_from_env
+    from app.notion.client import PINNED_NOTION_VERSION, NotionClient
     from app.notion.worker import poll_shared_pages, retry_notion_failures
 
-    client = notion_client_from_env()
-    graph = connect_graph()
-    from app.connect.credentials import notion_workspace_id
+    from app.connect.credentials import notion_token, notion_workspace_id
 
+    chosen = tenant or _env("WEAVE_TENANT_ID") or _env("WEAVE_TENANT") or "demo"
+    token = notion_token(tenant) if tenant else notion_token()
+    workspace = notion_workspace_id(tenant) if tenant else notion_workspace_id()
+    if not token or not workspace:
+        return False
+    version = _env("NOTION_VERSION") or PINNED_NOTION_VERSION
+    client = NotionClient(token, version=version)
+    graph = connect_graph(tenant=chosen)
     poll_shared_pages(
-        _env("WEAVE_TENANT_ID", "demo"),
+        chosen,
         _env("NOTION_CONNECTION_ID", "notion-main"),
-        notion_workspace_id(),
+        workspace,
         client,
         graph,
     )
     retry_notion_failures(graph, client)
+    return True
 
 
-def _drive_once() -> None:
-    from app.gdrive.client import drive_client_from_env
+def _drive_once(tenant: str | None = None) -> bool:
+    from app.gdrive.client import DriveClient, drive_client_from_env
     from app.gdrive.worker import poll_folder, retry_drive_failures
     from app.graph.client import connect_graph
 
-    client = drive_client_from_env()
-    graph = connect_graph()
-    from app.connect.credentials import google_folder_id
+    from app.connect.credentials import google_access_token, google_folder_id
 
+    chosen = tenant or _env("WEAVE_TENANT_ID") or _env("WEAVE_TENANT") or "demo"
+    folder = google_folder_id(tenant) if tenant else google_folder_id()
+    if tenant:
+        token = google_access_token(tenant)
+        if not token or not folder:
+            return False
+        client = DriveClient(token=token)
+    else:
+        if not folder:
+            return False
+        client = drive_client_from_env()
+    graph = connect_graph(tenant=chosen)
     poll_folder(
-        _env("WEAVE_TENANT_ID", "demo"),
+        chosen,
         _env("GOOGLE_DRIVE_CONNECTION_ID", "gdrive-main"),
-        google_folder_id(),
+        folder,
         client,
         graph,
     )
     retry_drive_failures(graph, client)
+    return True
 
 
-def _github_once() -> None:
-    from app.github.client import github_client_from_env
+def _github_once(tenant: str | None = None) -> bool:
+    from app.github.client import PINNED_GITHUB_API_VERSION, GitHubClient
     from app.github.worker import poll_repository, retry_github_failures
     from app.graph.client import connect_graph
 
-    client = github_client_from_env()
-    graph = connect_graph()
-    from app.connect.credentials import github_coordinates
+    from app.connect.credentials import github_access_token, github_coordinates
 
-    owner, repo = github_coordinates()
+    chosen = tenant or _env("WEAVE_TENANT_ID") or _env("WEAVE_TENANT") or "demo"
+    owner, repo = github_coordinates(tenant) if tenant else github_coordinates()
+    token = github_access_token(tenant) if tenant else github_access_token()
+    if not owner or not repo or not token:
+        return False
+    version = _env("GITHUB_API_VERSION") or PINNED_GITHUB_API_VERSION
+    client = GitHubClient(token, api_version=version)
+    graph = connect_graph(tenant=chosen)
     poll_repository(
-        _env("WEAVE_TENANT_ID", "demo"),
+        chosen,
         _env("GITHUB_CONNECTION_ID", "github-main"),
         owner,
         repo,
@@ -142,6 +226,7 @@ def _github_once() -> None:
         graph,
     )
     retry_github_failures(graph, client)
+    return True
 
 
 def _every() -> int:
@@ -200,10 +285,13 @@ def _supervise_process(name: str, args: list[str], every: int) -> None:
 
 def _poll_loop(name: str, once, every: int) -> None:
     while not _stop.is_set():
-        try:
-            once()
-        except Exception:
-            log.exception("%s sync failed", name)
+        tenants = _grant_tenants(name) or [None]
+        for tenant in tenants:
+            try:
+                if once(tenant) and tenant:
+                    _mark_connected(name, tenant)
+            except Exception:
+                log.exception("%s sync failed", name)
         if _stop.wait(every):
             return
 
@@ -241,7 +329,7 @@ def main() -> None:
         daemon=True,
     ).start()
     for name, ready, once in _connectors():
-        if not ready():
+        if not ready() and not _grant_tenants(name):
             log.info("%s sync skipped", name)
             continue
         log.info("%s sync started", name)

@@ -32,6 +32,14 @@ def _tenant(tenant: str | None) -> str:
     return (tenant or os.environ.get("WEAVE_TENANT_ID") or os.environ.get("WEAVE_TENANT") or "").strip()
 
 
+def _explicit(tenant: str | None) -> str:
+    """A caller-chosen tenant. Empty means the process environment may be used."""
+
+    if tenant is None:
+        return ""
+    return tenant.strip()
+
+
 def row(tenant: str | None, provider: str) -> dict | None:
     name = _tenant(tenant)
     if not name:
@@ -46,6 +54,8 @@ def slack_bot_token(tenant: str | None = None) -> str:
     found = row(tenant, "slack")
     if found and found.get("token") and found.get("status") != "failed":
         return str(found["token"])
+    if _explicit(tenant):
+        return ""
     return os.environ.get("SLACK_BOT_TOKEN", "").strip()
 
 
@@ -53,6 +63,8 @@ def slack_workspace_id(tenant: str | None = None) -> str:
     found = row(tenant, "slack")
     if found and found.get("external_id"):
         return str(found["external_id"])
+    if _explicit(tenant):
+        return ""
     return os.environ.get("WEAVE_WORKSPACE_ID", "").strip()
 
 
@@ -60,6 +72,8 @@ def notion_token(tenant: str | None = None) -> str:
     found = row(tenant, "notion")
     if found and found.get("token") and found.get("status") != "failed":
         return str(found["token"])
+    if _explicit(tenant):
+        return ""
     return os.environ.get("NOTION_TOKEN", "").strip()
 
 
@@ -67,6 +81,8 @@ def notion_workspace_id(tenant: str | None = None) -> str:
     found = row(tenant, "notion")
     if found and found.get("external_id"):
         return str(found["external_id"])
+    if _explicit(tenant):
+        return ""
     return os.environ.get("NOTION_WORKSPACE_ID", "").strip()
 
 
@@ -74,6 +90,8 @@ def google_folder_id(tenant: str | None = None) -> str:
     found = row(tenant, "google")
     if found and found.get("folder_id"):
         return str(found["folder_id"])
+    if _explicit(tenant):
+        return ""
     return os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "").strip()
 
 
@@ -118,9 +136,11 @@ def google_access_token(tenant: str | None = None) -> str:
 
 def github_coordinates(tenant: str | None = None) -> tuple[str, str]:
     found = row(tenant, "github") or {}
-    owner = str(found.get("owner") or os.environ.get("GITHUB_OWNER", "")).strip()
-    repo = str(found.get("repo") or os.environ.get("GITHUB_REPO", "")).strip()
-    return owner, repo
+    owner = str(found.get("owner") or "").strip()
+    repo = str(found.get("repo") or "").strip()
+    if _explicit(tenant):
+        return owner, repo
+    return owner or os.environ.get("GITHUB_OWNER", "").strip(), repo or os.environ.get("GITHUB_REPO", "").strip()
 
 
 def github_access_token(tenant: str | None = None) -> str:
@@ -140,6 +160,8 @@ def github_access_token(tenant: str | None = None) -> str:
             return minted
         if token:
             return token
+    if _explicit(tenant):
+        return ""
     return os.environ.get("GITHUB_TOKEN", "").strip()
 
 

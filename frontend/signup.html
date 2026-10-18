@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Create a company — Weave</title>
+<link rel="icon" href="/brand/icon.png">
+<link rel="stylesheet" href="/landing/stage.css">
+<style>
+  form { display: grid; gap: 12px; max-width: 360px; margin-top: 28px; }
+  label { color: var(--dim); font-size: 14px; }
+  input {
+    height: 44px; border-radius: 6px; border: 1px solid var(--line);
+    background: #0a0a0a; color: var(--ink); padding: 0 12px; font: inherit;
+  }
+  button {
+    height: 44px; border: 0; border-radius: 6px; background: #fff; color: #000;
+    font-weight: 650; cursor: pointer;
+  }
+  button:focus-visible, a:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+  .error { color: #f5f5f5; min-height: 1.4em; }
+  .alt { color: var(--dim); }
+  .alt a { color: var(--ink); }
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/"><img src="/brand/mark.png" alt="">Weave</a>
+  <a class="textlink" href="/login">Sign in</a>
+</header>
+<main class="hero">
+  <h1>Create a company.</h1>
+  <p class="lede">Your company gets its own graph. It does not see anyone else’s.</p>
+  <p id="error" class="error" role="alert"></p>
+  <form method="post" action="/signup">
+    <label for="name">Your name</label>
+    <input id="name" name="name" autocomplete="name" required>
+    <label for="email">Work email</label>
+    <input id="email" name="email" type="email" autocomplete="username" required>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="new-password" minlength="10" required>
+    <label for="company">Company name</label>
+    <input id="company" name="company" required>
+    <button type="submit">Create company</button>
+  </form>
+  <p class="alt">Already registered? <a href="/login">Sign in</a></p>
+</main>
+<script>
+const messages = {
+  email: "Enter a work email.",
+  password: "Use at least 10 characters.",
+  name: "Enter your name.",
+  company: "Enter a company name.",
+  reserved: "That company name is not available.",
+  taken: "Choose a different company name.",
+  registered: "That email is already registered.",
+};
+const code = new URLSearchParams(location.search).get("error");
+if (code && messages[code]) document.getElementById("error").textContent = messages[code];
+</script>
+</body>
+</html>

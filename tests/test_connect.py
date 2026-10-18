@@ -5,8 +5,12 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
+from app.connect import accounts
 from app.connect.credentials import slack_bot_token, use_store
+
+accounts.SKIP_GRAPH = True
 from app.connect.oauth import complete
+from app.connect.routes import _schedule
 from app.connect.secrets import MemorySecretStore
 from app.ingest.records import MemoryStore
 from app.main import _run_slack_reply, create_app
@@ -16,11 +20,25 @@ def _app(secrets=None):
     return create_app(tenant_id="real", store=MemoryStore(), secrets=secrets or MemorySecretStore())
 
 
-def test_oauth_state_mismatch_is_rejected():
+def _signed_in(app, email="owner@north.test", company="North", name="Owner"):
+    client = TestClient(app)
+    response = client.post(
+        "/signup",
+        data={"name": name, "email": email, "password": "correct-horse", "company": company},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("/setup")
+    return client
+
+
+def test_oauth_state_mismatch_is_rejected(monkeypatch):
+    monkeypatch.setenv("WEAVE_VIEWER_EMAIL", "person@example.com")
     app = _app()
+    client = _signed_in(app, email="person@example.com", company="Weave")
     app.state.oauth_states.put("abc", "real", "notion")
-    response = TestClient(app).get("/connect/slack/callback?state=abc&code=nope", follow_redirects=False)
-    assert response.status_code == 302
+    response = client.get("/connect/slack/callback?state=abc&code=nope", follow_redirects=False)
+    assert response.status_code == 303
     assert response.headers["location"].endswith("error=state")
 
 
@@ -45,7 +63,8 @@ def test_stored_slack_token_is_what_the_reply_path_uses(monkeypatch):
     app = _app(secrets)
     _run_slack_reply(app, {}, object())
     assert seen["token"] == "xoxb-from-store"
-    assert slack_bot_token("nobody") == "xoxb-from-env"
+    assert slack_bot_token("nobody") == ""
+    assert slack_bot_token() == "xoxb-from-env"
     use_store(None)
 
 
@@ -74,16 +93,41 @@ def test_callback_saves_the_slack_token_from_the_exchange(monkeypatch):
     use_store(None)
 
 
-def test_connector_cards_include_the_four_tools_and_leave_hubspot_closed():
+def test_landing_page_links_to_setup_and_uses_the_mark():
     app = _app()
     page = TestClient(app).get("/")
+    assert page.status_code == 200
+    assert "Connected knowledge" in page.text
+    assert 'href="/enter"' in page.text
+    enter = TestClient(app).get("/enter", follow_redirects=False)
+    assert enter.status_code == 303
+    assert enter.headers["location"].endswith("/signup")
+    assert "/brand/mark.png" in page.text
+    assert "/landing/stage.js" in page.text
+    stage = TestClient(app).get("/landing/stage.js")
+    assert stage.status_code == 200
+    assert stage.headers["content-type"].startswith("text/javascript")
+    assert "SUPERSEDES" in stage.text
+    blocked = TestClient(app).get("/landing/secret.env")
+    assert blocked.status_code == 404
+    mark = TestClient(app).get("/brand/mark.png")
+    assert mark.status_code == 200
+    assert mark.headers["content-type"].startswith("image/")
+    missing = TestClient(app).get("/brand/secret.env")
+    assert missing.status_code == 404
+
+
+def test_connector_cards_include_the_four_tools_and_leave_hubspot_closed():
+    app = _app()
+    client = _signed_in(app)
+    page = client.get("/setup")
     assert page.status_code == 200
     assert 'data-provider="slack"' in page.text
     assert 'data-provider="notion"' in page.text
     assert 'data-provider="google"' in page.text
     assert 'data-provider="github"' in page.text
     assert 'data-provider="hubspot" data-connectable="false"' in page.text
-    status = TestClient(app).get("/setup/status").json()
+    status = client.get("/setup/status").json()
     cards = {card["id"]: card for card in status["connectors"]}
     assert cards["hubspot"]["connectable"] is False
     assert cards["hubspot"]["status"] == "unavailable"
@@ -94,7 +138,7 @@ def test_open_weave_requires_a_connection_and_then_mints_a_token(monkeypatch):
     monkeypatch.setenv("WEAVE_VIEWER_EMAIL", "person@example.com")
     secrets = MemorySecretStore()
     app = _app(secrets)
-    client = TestClient(app)
+    client = _signed_in(app, email="person@example.com", company="Weave")
     blocked = client.post("/setup/open")
     assert blocked.status_code == 400
     secrets.put("real", "slack", "T1", {"token": "xoxb-ready"}, status="connected")
@@ -129,4 +173,39 @@ def test_open_weave_requires_a_connection_and_then_mints_a_token(monkeypatch):
     assert body["pet"]["token"] == body["token"]
     assert body["token"] not in json.dumps(client.get("/setup/status").json())
     assert saved["committed"] is True
+    use_store(None)
+
+
+class _Now:
+    def add_task(self, fn):
+        fn()
+
+
+def test_missing_embedder_marks_the_grant_connected(monkeypatch):
+    monkeypatch.setenv("WEAVE_SECRET_KEY", "test-key")
+    secrets = MemorySecretStore()
+    secrets.put("real", "notion", "workspace", {"token": "ntn"}, status="syncing")
+    app = _app(secrets)
+
+    def boom(provider, tenant):
+        raise ModuleNotFoundError("sentence_transformers")
+
+    app.state.poll_now = boom
+    _schedule(app, _Now(), "notion")
+    assert secrets.get("real", "notion")["status"] == "connected"
+    use_store(None)
+
+
+def test_a_connector_error_marks_the_grant_failed(monkeypatch):
+    monkeypatch.setenv("WEAVE_SECRET_KEY", "test-key")
+    secrets = MemorySecretStore()
+    secrets.put("real", "notion", "workspace", {"token": "ntn"}, status="syncing")
+    app = _app(secrets)
+
+    def boom(provider, tenant):
+        raise RuntimeError("notion")
+
+    app.state.poll_now = boom
+    _schedule(app, _Now(), "notion")
+    assert secrets.get("real", "notion")["status"] == "failed"
     use_store(None)

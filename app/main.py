@@ -65,7 +65,23 @@ def _deny_unless_viewer(app, request: Request):
     return None
 
 
-def _claims_for(app, payload: dict):
+def _slack_event_tenant(app, payload: dict) -> str:
+    """The company that owns this Slack workspace. The env tenant is the fallback."""
+
+    team = str(payload.get("team_id") or "")
+    if team:
+        try:
+            from app.connect.credentials import current_store
+
+            found = current_store().find_tenant("slack", team)
+        except Exception:
+            found = None
+        if found and found != "acme":
+            return found
+    return app.state.tenant_id or ""
+
+
+def _claims_for(app, payload: dict, tenant: str | None = None):
     """Claim store for a mention or DM. ``None`` when this process does not answer Slack."""
 
     from agents.slack.accept import is_answer_event
@@ -77,7 +93,7 @@ def _claims_for(app, payload: dict):
         return app.state.reply_claims
     from app.connect.credentials import slack_bot_token
 
-    if not slack_bot_token(app.state.tenant_id):
+    if not slack_bot_token(tenant or app.state.tenant_id):
         return None
     from agents.slack.claims import PostgresReplyClaims
     from shared.pg import connect_pg
@@ -85,14 +101,15 @@ def _claims_for(app, payload: dict):
     return PostgresReplyClaims(connect_pg)
 
 
-def _run_slack_reply(app, payload: dict, claims) -> None:
+def _run_slack_reply(app, payload: dict, claims, tenant: str | None = None) -> None:
     runner = app.state.slack_runner
     if runner is not None:
         runner(payload)
         return
     from app.connect.credentials import slack_bot_token
 
-    token = slack_bot_token(app.state.tenant_id)
+    chosen = tenant or app.state.tenant_id
+    token = slack_bot_token(chosen)
     if not token or claims is None:
         return
     from agents.answer.agent import build_agent
@@ -104,7 +121,7 @@ def _run_slack_reply(app, payload: dict, claims) -> None:
     runtime = live_runtime()
     answer_event(
         payload, runtime=runtime, agent=build_agent(runtime), slack=SlackApi(token), claims=claims,
-        tenant=app.state.tenant_id or runtime.cfg.tenant,
+        tenant=chosen or runtime.cfg.tenant,
         user_map=parse_user_map(os.environ.get("SLACK_USER_MAP")),
     )
 
@@ -127,6 +144,7 @@ def create_app(
     slack_runner=None,
     viewer_auth=None,
     secrets=None,
+    accounts=None,
 ) -> FastAPI:
     app = FastAPI()
     app.state.graph = graph
@@ -161,6 +179,16 @@ def create_app(
         app.state.secrets = MemorySecretStore()
     else:
         app.state.secrets = None
+    if accounts is not None:
+        app.state.accounts = accounts
+    elif store is None and graph is None and os.environ.get("DATABASE_URL"):
+        from app.connect.accounts import PostgresAccountStore
+
+        app.state.accounts = PostgresAccountStore()
+    else:
+        from app.connect.accounts import MemoryAccountStore
+
+        app.state.accounts = MemoryAccountStore()
     from app.connect.credentials import use_store
     from app.connect.routes import register_connect
 
@@ -193,32 +221,35 @@ def create_app(
         if not isinstance(payload, dict):
             return JSONResponse({"error": "invalid json"}, status_code=400)
 
+        tenant = _slack_event_tenant(app, payload)
+        workspace = str(payload.get("team_id") or app.state.workspace_id or "")
+
         def ingest() -> None:
             target = app.state.graph
             if target is None:
                 from app.graph.client import connect_graph
 
-                target = connect_graph()
+                target = connect_graph(tenant=tenant or None)
             apply_slack_event(
                 payload,
                 target,
                 store=_records(app),
-                tenant_id=app.state.tenant_id,
+                tenant_id=tenant,
                 connection_id=app.state.connection_id,
-                workspace_id=app.state.workspace_id,
+                workspace_id=workspace,
                 workspace_domain=app.state.workspace_domain or None,
             )
 
-        claims = _claims_for(app, payload)
+        claims = _claims_for(app, payload, tenant)
 
         def reply() -> None:
-            _run_slack_reply(app, payload, claims)
+            _run_slack_reply(app, payload, claims, tenant)
 
         from agents.slack.accept import accept
 
         return accept(
             payload, ingest=ingest, reply=reply, spawn=background.add_task, claims=claims,
-            tenant=app.state.tenant_id,
+            tenant=tenant,
         )
 
     @app.post("/github/webhook")

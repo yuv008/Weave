@@ -1,0 +1,206 @@
+:root {
+  --bg: #000;
+  --ink: #f5f5f5;
+  --dim: #a1a1aa;
+  --line: #242424;
+  --window: #0a0a0a;
+  --caret: #7c3aed;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; background: var(--bg); color: var(--ink); }
+
+body {
+  font: 16px/1.5 "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", sans-serif;
+  min-height: 100vh;
+}
+
+a { color: inherit; }
+
+.skip {
+  position: absolute;
+  left: 16px;
+  top: -40px;
+  background: #fff;
+  color: #000;
+  padding: 8px 12px;
+  z-index: 2;
+}
+
+.skip:focus { top: 12px; }
+
+.top, .hero, .stage, .sheet {
+  width: min(1080px, calc(100% - 64px));
+  margin: 0 auto;
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 72px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.brand img { height: 28px; width: auto; display: block; }
+
+.textlink, .go { cursor: pointer; }
+
+.textlink {
+  color: var(--dim);
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.textlink:hover { color: var(--ink); }
+
+.textlink:focus-visible, .go:focus-visible, .brand:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+}
+
+.hero { padding: 48px 0 36px; }
+
+h1 {
+  margin: 0;
+  max-width: 14ch;
+  font-weight: 520;
+  font-size: clamp(3.2rem, 7.4vw, 6.1rem);
+  line-height: 0.9;
+  letter-spacing: -0.055em;
+}
+
+h1 span {
+  display: block;
+  color: #8e8e96;
+}
+
+.lede {
+  max-width: 38rem;
+  margin: 22px 0 0;
+  color: var(--dim);
+  font-size: 1.05rem;
+}
+
+.go {
+  display: inline-flex;
+  align-items: center;
+  height: 44px;
+  margin-top: 28px;
+  padding: 0 16px;
+  background: #fff;
+  color: #000;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 650;
+  border-radius: 6px;
+}
+
+.go:hover { background: #e4e4e7; }
+
+.stage { padding-bottom: 28px; }
+
+.window {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--window);
+  overflow: hidden;
+}
+
+.chrome {
+  display: grid;
+  grid-template-columns: 72px 1fr 72px;
+  align-items: center;
+  height: 40px;
+  border-bottom: 1px solid var(--line);
+  padding: 0 14px;
+}
+
+.dots { display: flex; gap: 6px; }
+
+.dots i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #2e2e2e;
+  display: block;
+}
+
+.title, .live {
+  font: 12px/1 "Cascadia Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  color: #71717a;
+}
+
+.title { text-align: center; }
+
+.live { text-align: right; color: var(--caret); }
+
+.screen { position: relative; height: 420px; }
+
+canvas { width: 100%; height: 100%; display: block; }
+
+.wisp {
+  position: absolute;
+  right: 18px;
+  bottom: 8px;
+  width: 104px;
+  pointer-events: none;
+}
+
+.wisp svg { width: 100%; height: auto; display: block; }
+
+.sheet { padding: 64px 0 96px; }
+
+h2 {
+  margin: 0 0 8px;
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+table { width: 100%; border-collapse: collapse; }
+
+th, td {
+  text-align: left;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: baseline;
+}
+
+th {
+  color: #71717a;
+  font: 12px/1 "Cascadia Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  font-weight: 400;
+}
+
+td:first-child { width: 28%; font-weight: 600; }
+
+td:last-child { color: var(--dim); }
+
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+@media (max-width: 720px) {
+  .top, .hero, .stage, .sheet { width: min(1080px, calc(100% - 32px)); }
+  .screen { height: 480px; }
+  td:first-child { width: 34%; }
+  .wisp { width: 76px; }
+}

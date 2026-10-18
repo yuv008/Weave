@@ -43,6 +43,13 @@ class MemoryStateStore:
         with self._lock:
             self._rows[state] = (tenant, provider, time.time() + ttl)
 
+    def peek(self, state: str, provider: str) -> str:
+        with self._lock:
+            row = self._rows.get(state)
+        if row is None or row[1] != provider or row[2] < time.time():
+            raise StateMismatch("state")
+        return row[0]
+
     def pop(self, state: str, provider: str) -> str:
         with self._lock:
             row = self._rows.pop(state, None)

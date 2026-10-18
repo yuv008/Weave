@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weave</title>
+<link rel="icon" href="/brand/icon.png">
+<link rel="stylesheet" href="/landing/stage.css">
+</head>
+<body>
+<a class="skip" href="#stage">Skip to the session</a>
+<header class="top">
+  <a class="brand" href="/">
+    <img src="/brand/mark.png" alt="">
+    <span>Weave</span>
+  </a>
+  <a class="textlink" href="/enter">Set up</a>
+</header>
+<main>
+  <section class="hero">
+    <h1>Connected knowledge.<span>For everyone.</span></h1>
+    <p class="lede">A company brain on FalkorDB. It keeps the decision, the one it replaced, and the evidence.</p>
+    <a class="go" href="/enter">Set up Weave</a>
+  </section>
+  <section id="stage" class="stage" aria-label="Weave session">
+    <div class="window">
+      <div class="chrome">
+        <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="title">weave — session</span>
+        <span class="live" id="live">live</span>
+      </div>
+      <div class="screen">
+        <canvas id="screen" aria-hidden="true"></canvas>
+        <div id="wisp" class="wisp"></div>
+      </div>
+    </div>
+    <p class="sr">Question: which provider did we choose for SSO? Provider A is superseded by Provider B. Evidence: We are moving SSO to Provider B. Source: Slack.</p>
+  </section>
+  <section class="sheet">
+    <h2>Connected sources</h2>
+    <table>
+      <thead>
+        <tr><th>Source</th><th>What lands in the graph</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Slack</td><td>Public channels, threads, and the people who wrote them</td></tr>
+        <tr><td>Notion</td><td>Shared pages</td></tr>
+        <tr><td>Google Drive</td><td>Docs in one shared folder</td></tr>
+        <tr><td>GitHub</td><td>Issues, pull requests, and comments</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+<script src="/landing/stage.js" type="module"></script>
+</body>
+</html>

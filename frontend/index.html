@@ -83,6 +83,7 @@
 <main>
   <div class="mark" aria-hidden="true"></div>
   <h1>Set up Weave</h1>
+  <p id="who"></p>
   <p>Connect the tools your company already uses. One connection is enough to start. Weave does not show excerpts on this page.</p>
 
   <h2>1. Company</h2>
@@ -192,7 +193,34 @@ async function post(url, body) {
 }
 
 async function load() {
-  const status = await fetch("/setup/status").then((response) => response.json());
+  const session = await fetch("/session").then((response) => response.ok ? response.json() : null);
+  const who = document.getElementById("who");
+  if (session) {
+    who.textContent = session.email + " · " + session.tenant;
+    if ((session.memberships || []).length > 1) {
+      const form = document.createElement("form");
+      const select = document.createElement("select");
+      session.memberships.forEach((item) => {
+        const option = document.createElement("option");
+        option.value = item.tenant;
+        option.textContent = item.tenant;
+        option.selected = item.tenant === session.tenant;
+        select.append(option);
+      });
+      select.addEventListener("change", async () => {
+        await post("/session/tenant", { tenant: select.value });
+        load();
+      });
+      form.append(select);
+      who.append(form);
+    }
+  }
+  const statusResponse = await fetch("/setup/status");
+  if (statusResponse.status === 401) {
+    location.href = "/login";
+    return;
+  }
+  const status = await statusResponse.json();
   document.getElementById("company-name").value = status.company || "";
   document.getElementById("model-state").textContent = status.model === "saved" ? "A model key is saved." : "Using the server default.";
   cards.replaceChildren();

@@ -122,7 +122,7 @@ FalkorDB is the brain itself. Everything the agent knows about the company is a 
 
 ### Graph data model
 
-The full model is in [docs/graph-model.md](docs/graph-model.md): every node's properties, every edge's allowed endpoints, ids, ACL format, indexes, validator rules, and example Cypher. In summary, there are 13 core node types in 4 families.
+The full model is in [docs/graph-model.md](docs/graph-model.md): every node's properties, every edge's allowed endpoints, ids, ACL format, indexes, validator rules, every Cypher query the product runs, and the graph algorithms built on them. In summary, there are 13 core node types in 4 families.
 
 | Family | Nodes |
 | --- | --- |

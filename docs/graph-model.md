@@ -447,50 +447,507 @@ flowchart TB
 - **"What breaks if we change SSO?"** `impact_of` walks `DEPENDS_ON` and `NEEDS` back from the decision to Priya's commitment and the Acme deal. It returns their owner through `OWNS`. Each hop is gated by the edge's `evidence_ids`.
 - **Priya cannot see `#eng-sso`.** She still gets the decision through an approved `Projection` or the GitHub issue, but `m1` is never quoted to her.
 
-## Example queries
+## Cypher queries the product depends on
 
-Current decision on a topic, with only the evidence the caller may see:
+These are the queries the product actually runs, copied from the code with the schema constants written out. Agent queries go through `ro_query`; only the ingestion rows at the end write.
+
+Two shorthands are used below:
+
+- `VISIBLE(i)` stands for the [item rule](#permissions-in-the-graph), expanded in place for the alias `i`.
+- `KEEP_VISIBLE(d)` stands for the claim rule's `WITH` step:
+
+  ```cypher
+  WITH d, [(d)-[:EVIDENCED_BY]->(gate_i:Item) WHERE VISIBLE(gate_i) | gate_i] AS gate_evidence
+  WHERE size(gate_evidence) > 0
+  ```
+
+Lookups by id use `UNWIND $ids` so that one round trip covers a whole batch. Each one hits the range index on `id`.
+
+### 1. Who is asking: the principal
+
+[`agents/gate/stores.py`](../agents/gate/stores.py) builds the caller's level, department, and subordinates. Managers at level 2 and above inherit the ACL groups of everyone who reports to them, up to 6 levels deep:
 
 ```cypher
-MATCH (d:Decision)-[:ABOUT]->(t:Topic {id: $topic})
-WHERE d.status = 'active'
-WITH d, [(d)-[e:EVIDENCED_BY]->(i:Item) WHERE <item rule on i> | i] AS gate_evidence
-WHERE size(gate_evidence) > 0
-RETURN d.statement, d.valid_from, gate_evidence
-ORDER BY d.valid_from DESC LIMIT 1
+MATCH (p:Person {id: $id})
+OPTIONAL MATCH (s:Person)-[:REPORTS_TO*1..6]->(p)
+RETURN p.level, p.dept, collect(DISTINCT s.id)
 ```
 
-The decision as it stood on a past date:
+In a shared Slack channel the principal is the channel audience. Its level is the lowest level among the members:
 
 ```cypher
-MATCH (d:Decision)-[:ABOUT]->(t:Topic {id: $topic})
+MATCH (p:Person) WHERE p.id IN $ids
+RETURN p.id, p.level
+```
+
+### 2. What the question is about: subject matching
+
+[`agents/answer/subjects.py`](../agents/answer/subjects.py) loads every subject name and alias once per question, then matches them in Python (see [Graph algorithms](#graph-algorithms)):
+
+```cypher
+MATCH (n)
+WHERE (n:Topic OR n:Project OR n:Customer OR n:Deal OR n:Person)
+  AND coalesce(n.provisional, false) = false
+RETURN n.id, n.name, coalesce(n.aliases, []), labels(n)
+```
+
+When a tool argument names a subject, [`agents/tools/subjects.py`](../agents/tools/subjects.py) resolves it by id, by name, or by alias:
+
+```cypher
+MATCH (n)
+WHERE (n:Topic OR n:Project OR n:Customer OR n:Deal)
+  AND coalesce(n.provisional, false) = false
+  AND (n.id = $ref
+       OR toLower(n.name) = $lower
+       OR any(a IN coalesce(n.aliases, []) WHERE toLower(a) = $lower))
+RETURN n.id, n.name, labels(n)
+```
+
+### 3. `get_decision`: the current decision, or the one in force on a date
+
+Find candidate decisions about the subject. The current decision:
+
+```cypher
+MATCH (d:Decision)-[:ABOUT]->(s {id: $subject})
+WHERE d.status = 'active'
+RETURN d.id
+```
+
+The decision in force at `$as_of` (time travel):
+
+```cypher
+MATCH (d:Decision)-[:ABOUT]->(s {id: $subject})
 WHERE d.status <> 'retracted'
   AND d.valid_from <= $as_of
   AND (d.valid_to IS NULL OR d.valid_to > $as_of)
-RETURN d
+RETURN d.id
 ```
 
-The history of a decision:
+Keep only the candidates with visible evidence. This is the claim rule:
 
 ```cypher
-MATCH path = (d:Decision {id: $id})-[:SUPERSEDES*0..]->(older:Decision)
-RETURN [n IN nodes(path) | n.statement] AS history
+UNWIND $ids AS cid
+MATCH (d {id: cid})
+KEEP_VISIBLE(d)
+RETURN d.id
 ```
 
-Who owns a customer, through their deals:
+Load the decision cards:
 
 ```cypher
-MATCH (p:Person)-[:OWNS]->(s {id: $subject}) RETURN p.name, p.dept
+UNWIND $ids AS did
+MATCH (d:Decision {id: did})
+RETURN d.id, d.statement, d.status, d.valid_from, d.valid_to, d.confidence, d.last_verified_at
+```
+
+Load the citations: only the visible evidence, with its quote, author, source, and link, oldest first:
+
+```cypher
+UNWIND $ids AS cid
+MATCH (c {id: cid})-[e:EVIDENCED_BY]->(i:Item)
+WHERE VISIBLE(i)
+OPTIONAL MATCH (i)-[:AUTHORED_BY]->(p:Person)
+OPTIONAL MATCH (i)-[:IN_SOURCE]->(s:Source)
+RETURN cid, i.id, e.quote, p.name, i.occurred_at, s.name, i.source_url, p.id
+ORDER BY i.occurred_at
+```
+
+Count the hidden evidence. The count is recorded for the audit log; it is never named to the caller:
+
+```cypher
+UNWIND $ids AS cid
+MATCH (c {id: cid})-[:EVIDENCED_BY]->(i:Item)
+WHERE NOT VISIBLE(i)
+RETURN count(i)
+```
+
+Walk the supersession chain: what this decision replaced (`older`) or what replaced it (`newer`), nearest first, up to 6 hops. The same query serves `Figure` and `Commitment`:
+
+```cypher
+// older
+MATCH path = (c:Decision {id: $id})-[:SUPERSEDES*1..6]->(o:Decision)
+RETURN o.id, length(path) ORDER BY length(path)
+
+// newer
+MATCH path = (o:Decision)-[:SUPERSEDES*1..6]->(c:Decision {id: $id})
+RETURN o.id, length(path) ORDER BY length(path)
+```
+
+When the caller sees no evidence, fall back to approved summaries, which [`agents/gate/visible.py`](../agents/gate/visible.py) checks with the projection rule:
+
+```cypher
+UNWIND $ids AS cid
+MATCH (p:Projection)-[:SUMMARIZES]->(c {id: cid})
+WHERE p.status = 'approved'
+  AND p.level_floor <= $gate_level
+  AND any(g IN p.audience WHERE g IN $gate_groups)
+RETURN cid, p.id, p.summary
+```
+
+### 4. `trace_decision`: from a decision back to its source
+
+Check that the decision is visible:
+
+```cypher
+MATCH (d:Decision {id: $id})
+KEEP_VISIBLE(d)
+RETURN d.id
+```
+
+Fetch every evidence item with a visibility flag, so that hidden hops are counted rather than named:
+
+```cypher
+MATCH (d:Decision {id: $id})-[e:EVIDENCED_BY]->(i:Item)
+WITH d, e, i, VISIBLE(i) AS ok
+OPTIONAL MATCH (i)-[:AUTHORED_BY]->(p:Person)
+OPTIONAL MATCH (i)-[:IN_SOURCE]->(s:Source)
+RETURN ok, i.id, e.quote, i.occurred_at, i.source_url, p.id, p.name, s.id, s.name
+ORDER BY i.occurred_at
+```
+
+Expand each evidence item one hop into its thread and links, in both directions:
+
+```cypher
+UNWIND $ids AS iid
+MATCH (i:Item {id: iid})-[r:REPLIES_TO|LINKS_TO]->(t:Item)
+RETURN iid, type(r), t.id, VISIBLE(t), t.excerpt, t.source_url, t.occurred_at
+
+UNWIND $ids AS iid
+MATCH (t:Item)-[r:REPLIES_TO|LINKS_TO]->(i:Item {id: iid})
+RETURN iid, type(r), t.id, VISIBLE(t), t.excerpt, t.source_url, t.occurred_at
+```
+
+### 5. `find_owner`: who owns it and who knows it
+
+Owners, either directly or through the deals for a customer:
+
+```cypher
+MATCH (p:Person)-[:OWNS]->(s {id: $subject})
+RETURN p.id AS person, p.name AS name, p.dept AS dept, s.id AS owned
 UNION
-MATCH (p:Person)-[:OWNS]->(:Deal)-[:FOR]->(:Customer {id: $subject}) RETURN p.name, p.dept
+MATCH (p:Person)-[:OWNS]->(d:Deal)-[:FOR]->(s:Customer {id: $subject})
+RETURN p.id AS person, p.name AS name, p.dept AS dept, d.id AS owned
 ```
 
-Open cross-team dependencies per department:
+Activity for scoring experts. This covers items that mention the subject, and items that are evidence for claims about it. A visibility flag rides along on every row:
 
 ```cypher
-MATCH (p1:Person)-[:OWNS]->(a:Commitment)-[r:DEPENDS_ON]->(b)<-[:OWNS]-(p2:Person)
-WHERE a.progress IN ['open', 'at_risk'] AND p1.dept <> p2.dept
-RETURN p1.dept AS from_dept, p2.dept AS to_dept, count(*) AS open_dependencies
+MATCH (i:Item)-[:MENTIONS]->(s {id: $subject})
+MATCH (i)-[:AUTHORED_BY]->(p:Person)
+OPTIONAL MATCH (i)-[:IN_SOURCE]->(src:Source)
+RETURN VISIBLE(i) AS ok, p.id AS person, p.name AS name, p.dept AS dept,
+       i.id AS item, i.occurred_at AS at, i.excerpt AS excerpt, i.source_url AS url,
+       src.name AS source, 'MENTIONS' AS via
+UNION
+MATCH (c)-[:ABOUT]->(s {id: $subject})
+MATCH (c)-[:EVIDENCED_BY]->(i:Item)-[:AUTHORED_BY]->(p:Person)
+OPTIONAL MATCH (i)-[:IN_SOURCE]->(src:Source)
+RETURN VISIBLE(i) AS ok, p.id AS person, p.name AS name, p.dept AS dept,
+       i.id AS item, i.occurred_at AS at, i.excerpt AS excerpt, i.source_url AS url,
+       src.name AS source, 'EVIDENCED_BY' AS via
 ```
 
-In the tools, every one of these also carries the gate's item and edge rules, and dependency walks expand one hop per query so each hop is filtered.
+### 6. `get_figures`: the latest numbers
+
+Find the active figures about the subject, optionally narrowed by name:
+
+```cypher
+MATCH (f:Figure)-[:ABOUT]->(s {id: $subject})
+WHERE f.status = 'active'
+  AND ($name IS NULL OR toLower(f.name) CONTAINS $name)
+RETURN f.id
+```
+
+Load the figure cards:
+
+```cypher
+UNWIND $ids AS fid
+MATCH (f:Figure {id: fid})
+RETURN f.id, f.name, f.value, f.unit, f.as_of, f.valid_to, f.confidence
+```
+
+The figures then go through the same claim rule, citations, and supersession chain queries as decisions (section 3). The chain is what gives a figure its history, for example "grown from $1.8M".
+
+### 7. `search_context`: hybrid search, gated by the graph
+
+Text hits come from Postgres: keyword search over `chunk.tsv`, plus vector search when an embedder is set. The same ACL rule is written in SQL. Each hit is then checked again against its graph `Item`, because the chunk's copy of the ACL can lag behind the graph. Hits that fail the check are dropped:
+
+```cypher
+UNWIND $ids AS iid
+MATCH (i:Item {id: iid})
+WHERE VISIBLE(i)
+OPTIONAL MATCH (i)-[:AUTHORED_BY]->(p:Person)
+OPTIONAL MATCH (i)-[:IN_SOURCE]->(s:Source)
+RETURN i.id, i.excerpt, p.name, i.occurred_at, s.name, i.source_url
+```
+
+Each surviving hit is expanded one hop to the claims it supports and the subjects it mentions:
+
+```cypher
+UNWIND $ids AS iid
+MATCH (c)-[:EVIDENCED_BY]->(i:Item {id: iid})
+WHERE c:Decision OR c:Commitment OR c:Figure
+RETURN iid, c.id, labels(c), coalesce(c.statement, c.name), c.status
+
+UNWIND $ids AS iid
+MATCH (i:Item {id: iid})-[:MENTIONS]->(s)
+RETURN iid, s.id, labels(s), s.name
+```
+
+### 8. `get_dependencies` and `impact_of`: walking across teams
+
+The walk expands one hop per query, and every hop is gated. `$ids` is the current frontier, and the relationship list is `NEEDS|DEPENDS_ON|BLOCKED_BY` (or `DEPENDS_ON|NEEDS` for impact).
+
+Gated hop, outgoing:
+
+```cypher
+UNWIND $ids AS nid
+MATCH (a {id: nid})-[r:NEEDS|DEPENDS_ON|BLOCKED_BY]->(b)
+OPTIONAL MATCH (gate_ei:Item)
+WHERE gate_ei.id IN coalesce(r.evidence_ids, []) AND VISIBLE(gate_ei)
+WITH a, b, r, collect(gate_ei) AS gate_edge_evidence
+WHERE size(gate_edge_evidence) > 0
+RETURN a.id, type(r), b.id, [x IN gate_edge_evidence | x.id]
+```
+
+Ungated hop. It returns only a count, so that the number of hidden edges can be reported without naming them:
+
+```cypher
+UNWIND $ids AS nid
+MATCH (a {id: nid})-[r:NEEDS|DEPENDS_ON|BLOCKED_BY]->(b)
+RETURN count(r)
+```
+
+The incoming direction is the same query with the pattern reversed: `(b)-[r:...]->(a {id: nid})`.
+
+Load the reached nodes with their owners and department:
+
+```cypher
+UNWIND $ids AS nid
+MATCH (n {id: nid})
+OPTIONAL MATCH (o:Person)-[:OWNS]->(n)
+OPTIONAL MATCH (n)-[:MADE_BY]->(m:Person)
+RETURN n.id, labels(n), coalesce(n.name, n.statement), n.status, n.progress,
+       collect(DISTINCT {id: o.id, name: o.name, dept: o.dept}),
+       collect(DISTINCT m.dept), n.due
+```
+
+### 9. `dept_rollup`: open cross-team work per department
+
+Open commitments that depend on another team's work. Only edges with visible evidence are kept:
+
+```cypher
+MATCH (p1:Person)-[:OWNS]->(a:Commitment)-[r:DEPENDS_ON]->(b)
+WHERE a.status = 'active' AND a.progress IN ['open', 'at_risk']
+OPTIONAL MATCH (gate_ei:Item)
+WHERE gate_ei.id IN coalesce(r.evidence_ids, []) AND VISIBLE(gate_ei)
+WITH p1, a, b, r, collect(gate_ei) AS gate_edge_evidence
+WHERE size(gate_edge_evidence) > 0
+RETURN p1.dept, a.id, a.progress, b.id
+```
+
+Project blocks, gated the same way:
+
+```cypher
+MATCH (x:Project)-[r:BLOCKED_BY]->(y)
+OPTIONAL MATCH (gate_ei:Item)
+WHERE gate_ei.id IN coalesce(r.evidence_ids, []) AND VISIBLE(gate_ei)
+WITH x, y, r, collect(gate_ei) AS gate_edge_evidence
+WHERE size(gate_edge_evidence) > 0
+RETURN x.id, y.id
+```
+
+Totals. Any difference from the visible counts is reported as hidden, never itemised:
+
+```cypher
+MATCH (:Person)-[:OWNS]->(a:Commitment)-[r:DEPENDS_ON]->()
+WHERE a.status = 'active' AND a.progress IN ['open', 'at_risk']
+RETURN count(r)
+
+MATCH (:Project)-[r:BLOCKED_BY]->() RETURN count(r)
+```
+
+### 10. Impact watcher: from a change to a notice
+
+Recipient selection is the one ungated query. Its result is never shown to anyone. The watcher only uses it to decide whom to run `impact_of` for, then sends each person only what their own gated call returns:
+
+```cypher
+MATCH (old {id: $id})<-[:DEPENDS_ON|NEEDS*1..3]-(x)
+MATCH (p:Person)-[:OWNS]->(x)
+RETURN DISTINCT p.id
+```
+
+Customers and deals behind an affected commitment, used to build the customer-update handoff:
+
+```cypher
+UNWIND $ids AS cid
+MATCH (:Commitment {id: cid})-[:PROMISED_TO]->(k:Customer)
+RETURN DISTINCT k.id
+
+UNWIND $ids AS kid
+MATCH (d:Deal)-[:FOR]->(:Customer {id: kid})
+RETURN DISTINCT d.id
+```
+
+What the handoff should draft from, which is what the commitment depends on and what the decision is about:
+
+```cypher
+UNWIND $ids AS cid
+MATCH (c {id: cid})-[:DEPENDS_ON]->(n)
+RETURN DISTINCT n.id
+
+UNWIND $ids AS did
+MATCH (d:Decision {id: did})-[:ABOUT]->(t:Topic)
+RETURN DISTINCT t.id
+```
+
+Where to deliver the notice:
+
+```cypher
+MATCH (p:Person {id: $id}) RETURN p.slack_id
+```
+
+### 11. `draft_email`: drafting from facts
+
+Load the facts the draft may state. They were already gated by the tool calls that found them:
+
+```cypher
+UNWIND $ids AS fid
+MATCH (c {id: fid})
+RETURN c.id, labels(c), c.statement, c.name, c.value, c.unit, c.as_of
+```
+
+Load the summaries the caller may quote (projection rule):
+
+```cypher
+UNWIND $ids AS pid
+MATCH (p:Projection {id: pid})
+WHERE p.status = 'approved' AND p.level_floor <= $gate_level
+  AND any(g IN p.audience WHERE g IN $gate_groups)
+RETURN p.id, p.summary
+```
+
+Find the recipient:
+
+```cypher
+MATCH (p:Person)
+WHERE p.id = $ref OR toLower(p.name) = $lower
+RETURN p.id, p.name
+```
+
+### 12. Memory recall: checking again before reusing a memory
+
+Agent memory stores node ids. On recall, [`visible_node_ids`](../agents/tools/common.py) sorts the ids by label and runs each group through its rule. A memory whose source the caller can no longer see is dropped:
+
+```cypher
+UNWIND $ids AS nid
+MATCH (n {id: nid})
+RETURN nid, labels(n), coalesce(n.provisional, false)
+
+UNWIND $ids AS nid
+MATCH (i {id: nid}) WHERE VISIBLE(i) RETURN i.id
+```
+
+Claim ids go through `KEEP_VISIBLE`, and projection ids go through the projection rule.
+
+### 13. Ingestion writes
+
+**Versioned item upsert** ([`app/graph/upsert.py`](../app/graph/upsert.py)). Changes are applied only when the incoming version is newer, or the node is a placeholder. An equal version re-merges edges without changing properties:
+
+```cypher
+MERGE (m:Message:Item {id: $msg_id})
+ON CREATE SET m.version = '', m.placeholder = false
+WITH m,
+  CASE WHEN coalesce(m.placeholder, false) = true
+         OR coalesce(m.version, '') < $version THEN true ELSE false END AS do_apply
+WHERE coalesce(m.placeholder, false) = true
+   OR coalesce(m.version, '') < $version
+   OR m.version = $version
+SET m.excerpt    = CASE WHEN do_apply THEN $excerpt    ELSE m.excerpt END,
+    m.acl_groups = CASE WHEN do_apply THEN $acl_groups ELSE m.acl_groups END,
+    m.min_level  = CASE WHEN do_apply THEN $min_level  ELSE m.min_level END,
+    m.deleted    = CASE WHEN do_apply THEN $deleted    ELSE m.deleted END,
+    m.version    = CASE WHEN do_apply THEN $version    ELSE m.version END
+    // ...the same pattern for every property
+RETURN do_apply
+```
+
+**Source and containment.** The item is linked to its source, which carries the permissions:
+
+```cypher
+MERGE (c:Conversation:Source {id: $conv_id})
+SET c.name = $source_name, c.acl_groups = $acl_groups, c.min_level = $min_level,
+    c.cascade_policy = $cascade_policy, c.authority = $authority
+MERGE (m:Message {id: $msg_id})
+MERGE (m)-[:IN_SOURCE]->(c)
+```
+
+**Thread parent.** A reply can arrive before its parent. In that case the parent is created as a placeholder, which a later write fills in:
+
+```cypher
+MERGE (parent:Message:Item {id: $parent_id})
+ON CREATE SET parent.placeholder = true, parent.excerpt = '', parent.version = '',
+              parent.acl_groups = $acl_groups, parent.min_level = $min_level
+MERGE (m:Message {id: $msg_id})
+MERGE (m)-[:REPLIES_TO]->(parent)
+```
+
+**Author link** ([`app/graph/link_author.py`](../app/graph/link_author.py)), added once the author's email is resolved:
+
+```cypher
+MERGE (p:Person {id: $person_id})
+SET p.name = $name, p.email = $email, p.slack_id = $slack_id
+MERGE (i {id: $item_id})
+MERGE (i)-[:AUTHORED_BY]->(p)
+```
+
+**Claim with evidence** ([`app/answer/claims.py`](../app/answer/claims.py)). The claim id is derived from the evidence and the statement, so writing the same fact twice merges into one node:
+
+```cypher
+MERGE (c:Commitment {id: $id})
+SET c.tenant_id = $tenant_id, c.status = 'active', c.valid_from = $valid_from,
+    c.confidence = $confidence, c.last_verified_at = $verified,
+    c.extractor_version = $extractor, c.statement = $statement, c.due = $due, c.progress = $progress
+WITH c
+MATCH (n:Item {id: $item_id})
+MERGE (c)-[e:EVIDENCED_BY]->(n)
+SET e.quote = $quote, e.span = $span, e.confidence = $confidence
+```
+
+**Supersede.** The old claim is closed, never overwritten, and a change event goes to the Postgres outbox as `{old_id}:superseded`:
+
+```cypher
+MATCH (new {id: $new}), (old {id: $old})
+MERGE (new)-[:SUPERSEDES]->(old)
+SET old.status = 'superseded', old.valid_to = $valid_to
+```
+
+**Indexes** ([`shared/indexes.py`](../shared/indexes.py)):
+
+```cypher
+CREATE INDEX FOR (n:Decision) ON (n.id)        // one per contract label
+CREATE INDEX FOR (n:Decision) ON (n.status)    // also Commitment, Figure, Projection
+CREATE INDEX FOR (n:Item) ON (n.min_level)
+CREATE INDEX FOR (n:Person) ON (n.email)
+CALL db.idx.fulltext.createNodeIndex('Topic', 'name')     // also Project, Customer
+```
+
+## Graph algorithms
+
+The tools build on the queries above with a few small algorithms. Each one keeps the permission rule intact: anything hidden is dropped before it can be ranked, counted, or scored.
+
+| Algorithm | Where | How it works |
+| --- | --- | --- |
+| **Gated breadth-first walk** | `_walk` in [`agents/tools/dependencies.py`](../agents/tools/dependencies.py) | Starts from the root and expands one hop per query, up to depth 3, over `NEEDS`, `DEPENDS_ON`, and `BLOCKED_BY`. At each hop, an edge is kept only if its `evidence_ids` include a visible item, and a claim at either end must pass `KEEP_VISIBLE`. The ungated count minus the gated count adds to `hidden`. A `seen` set stops cycles. `impact_of` walks only incoming edges and exempts the changed decision itself, so an owner learns their work is at risk even when the decision's source is private. |
+| **Supersession chain** | `supersession` in [`agents/tools/common.py`](../agents/tools/common.py) | A variable-length `SUPERSEDES*1..6` path, ordered by `length(path)` so the nearest claim comes first. Each claim in the chain is shown if visible, shown as its projection summary if it has one, or otherwise counted as hidden. This gives "replaces Provider A (Oct 3)" and a figure's history. |
+| **Point-in-time lookup** | `get_decision(as_of=...)` | Selects the claim whose `[valid_from, valid_to)` interval contains `as_of`, skipping retracted claims. Because timestamps are normalized ISO strings, comparing them as strings gives the right order. |
+| **Recency-decayed expertise** | `find_owner` in [`agents/tools/owners.py`](../agents/tools/owners.py) | For each person, score = Σ over their visible items of `0.5 ^ (age_days / 30)`, with a 30-day half-life (`expertise_half_life_days`). Items come from both `MENTIONS` and `EVIDENCED_BY` on claims about the subject. The top 3 people are returned, each with their 3 newest items as evidence. The score is computed at query time rather than read from `KNOWS_ABOUT.score`, so activity in hidden sources cannot raise anyone's rank. |
+| **Reciprocal rank fusion** | `fuse` in [`agents/tools/search.py`](../agents/tools/search.py) | Merges the keyword and vector rankings with `score = Σ 1 / (60 + rank)`. The fused list is filtered against the graph item rule before `LIMIT`, then expanded one hop to claims and mentions. |
+| **Subject matching** | `match_subjects` in [`agents/answer/subjects.py`](../agents/answer/subjects.py) | Every subject name and alias is matched against the question as a whole word, longest first, without overlapping matches. If a word matched nothing, a distinctive first word of a name still counts ("Acme" matches "Acme Corp" and "Acme renewal"). Common three-letter words are ignored, but names like "SSO" are kept. |
+| **Oversight closure** | `_PERSON` in [`agents/gate/stores.py`](../agents/gate/stores.py) | `REPORTS_TO*1..6` collects everyone below a manager. At level 2 and above, the manager's groups are the union of their own groups and their reports' groups. |
+| **Channel principal** | [`agents/gate/resolve.py`](../agents/gate/resolve.py) | In a shared channel, the answer is built for the most restricted reader: the lowest level among the channel's members, with only the channel's own group plus org-wide. |
+| **Claim visibility through evidence** | `keep_visible_claims` in [`agents/gate/visible.py`](../agents/gate/visible.py) | A claim exists for a caller only if at least one `EVIDENCED_BY` item passes the item rule. Counts, rankings, and roll-ups use only those claims, so aggregates cannot leak. |
+| **Hidden counting without naming** | Every tool | Each gated query has an ungated `count()` twin. The difference goes to `result.hidden` and the audit log. No id, title, or source name for hidden data ever reaches the answer. |
+| **Bounded plan-and-act loop** | [`agents/answer/loop.py`](../agents/answer/loop.py) | At most 6 tool calls per question (`max_tool_calls`). Each tool returns node ids, so the next call starts from graph ids rather than text. The edges walked are returned as the answer's `path` and drawn as a mini graph. |
+| **Idempotent versioned merge** | [`app/graph/upsert.py`](../app/graph/upsert.py) | Ids are deterministic. A write is a `MERGE` guarded by `version`, so a replay or out-of-order delivery converges on the newest state. |
+| **Confidence and freshness labels** | `ctx.likely`, `get_figures` | A claim below `likely_threshold` (0.7) is labelled "likely". A figure whose `as_of` is older than `figure_stale_days` (30) gets a stale badge. A source whose ACL sync is older than `acl_stale_minutes` (15) drops out of `$gate_fresh`, which hides its items. |

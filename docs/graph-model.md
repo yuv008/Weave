@@ -951,3 +951,26 @@ The tools build on the queries above with a few small algorithms. Each one keeps
 | **Bounded plan-and-act loop** | [`agents/answer/loop.py`](../agents/answer/loop.py) | At most 6 tool calls per question (`max_tool_calls`). Each tool returns node ids, so the next call starts from graph ids rather than text. The edges walked are returned as the answer's `path` and drawn as a mini graph. |
 | **Idempotent versioned merge** | [`app/graph/upsert.py`](../app/graph/upsert.py) | Ids are deterministic. A write is a `MERGE` guarded by `version`, so a replay or out-of-order delivery converges on the newest state. |
 | **Confidence and freshness labels** | `ctx.likely`, `get_figures` | A claim below `likely_threshold` (0.7) is labelled "likely". A figure whose `as_of` is older than `figure_stale_days` (30) gets a stale badge. A source whose ACL sync is older than `acl_stale_minutes` (15) drops out of `$gate_fresh`, which hides its items. |
+
+---
+
+## Hackathon answers
+
+### What problem does your project solve, and who is it for?
+
+Companies already know the answers — they're scattered across Slack, Notion, Drive, and GitHub. People waste time searching threads, pinging teammates, and guessing which decision is still current. Chat-with-docs tools help with search but miss three harder cases: facts change (Provider A → Provider B), facts depend on other teams' work (Sales promises rest on Engineering decisions), and not everyone may see everything (interns shouldn't see leadership channels).
+
+**Weave** is a company brain for teams that need answers they can trust. It connects people, projects, documents, and decisions in one permission-aware graph, then answers from Cursor, Slack, or Gmail via a desktop companion (`@bubble`). Every claim comes with a source. Ownership and "who knows what" are queryable. When a decision reverses, the people it affects get notified. Built for engineering and sales teams that need cross-team clarity without leaking private channels.
+
+### How did you use FalkorDB in your project?
+
+FalkorDB is Weave's company memory: one graph per tenant (`co:{tenant}`), one private graph per user. Connectors ingest Slack, Notion, Drive, and GitHub into nodes (people, projects, decisions, commitments, figures, items, sources) and typed edges (`EVIDENCED_BY`, `SUPERSEDES`, `NEEDS`, `DEPENDS_ON`, `OWNS`, and more). Agents never write free-form Cypher — they call fixed tools over read-only queries.
+
+Technical problems we solved with it:
+
+1. **Permission-aware answers.** Every query embeds a shared visibility filter on `acl_groups`, `min_level`, and source freshness, so hidden data never ranks or returns. A claim is shown only if at least one evidence item is visible. FalkorDB has no `EXISTS {}` subqueries, so we express that as a `WITH … WHERE size(visible_evidence) > 0` step.
+2. **Provenance.** Decisions link through `EVIDENCED_BY` to the message or doc that states them, so every answer cites quote, author, date, and link.
+3. **Freshness without overwrite.** Reversals add `SUPERSEDES` and close `valid_to` — history stays queryable ("current" vs "as of date X").
+4. **Cross-team impact.** `NEEDS` / `DEPENDS_ON` walks (gated one hop at a time) find which Sales commitments break when Engineering changes a decision, without exposing private threads.
+5. **Ownership & expertise.** `OWNS` plus query-time scoring over only visible items answers "who owns this?" and "who knows this?" without leaking private activity.
+6. **Safe ingestion.** Deterministic ids + `MERGE` + version checks make webhooks and retries idempotent.

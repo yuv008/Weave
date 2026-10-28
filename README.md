@@ -285,7 +285,8 @@ When you use the Compose databases, set `FALKORDB_HOST=falkordb` and use `postgr
 
 ### Deployment
 
-- **AWS:** see [docs/deployment.md](docs/deployment.md). The tasks were stopped on 18 October 2026. The images and saved parameters remain.
+- **AWS:** see [docs/deployment.md](docs/deployment.md). Both services run in `ap-southeast-2`; the page has what is live, how to deploy, and what is committed but not deployed yet.
+- **Accounts and security:** see [docs/accounts-and-security.md](docs/accounts-and-security.md) for companies, owners and members, sign-in, tokens, the model key, rate limits, and how companies are kept apart.
 - **Public hostnames:** [deploy/README.md](deploy/README.md) documents the cloudflared hostnames for the web UI and MCP. Get tokens from `python -m scripts.issue_demo_tokens`.
 
 ### LLM

@@ -110,6 +110,7 @@ def remember_owner(tenant: str, email: str, name: str) -> None:
             SET p.{Prop.TENANT_ID} = $tenant_id,
                 p.{Prop.EMAIL} = $email,
                 p.{Prop.NAME} = $name,
+                p.{Prop.LEVEL} = coalesce(p.{Prop.LEVEL}, 0),
                 p.{Prop.PROVISIONAL} = true
             """,
             {

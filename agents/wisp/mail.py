@@ -239,10 +239,21 @@ def unsure(mode: str) -> dict[str, str]:
 
 
 def _model(agent):
-    llm = getattr(getattr(agent, "planner", None), "llm", None)
-    if llm is None:
-        raise RuntimeError("mail requires the answer model")
-    return llm
+    """The client that can complete a chat turn.
+
+    A live Groq agent keeps that client on the composer and uses a rule planner,
+    which has no model of its own. An injected model is also attached to the planner.
+    """
+
+    for owner in (
+        getattr(agent, "planner", None),
+        getattr(agent, "composer", None),
+        getattr(agent, "router", None),
+    ):
+        llm = getattr(owner, "llm", None)
+        if llm is not None:
+            return llm
+    raise RuntimeError("mail requires the answer model")
 
 
 def _question(to: str, subject: str, body: str, mode: str) -> str:

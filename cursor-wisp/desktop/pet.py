@@ -76,7 +76,6 @@ OPEN_HEIGHT = 280
 IGNORE_FOR = 10 * 60
 SUGGEST_BODY_MAX = 65536
 MAIL_PORT = 8766
-MAIL_URL = "http://127.0.0.1:8765/wisp/mail"
 MAIL_BODY_MAX = 524288
 ALERT_FOR = 0.35
 ASK_SETTLE = 0.7
@@ -522,7 +521,8 @@ class MailBridge:
             if watcher is None or not watcher._load_token():
                 missing = True
             else:
-                data = watcher._post_json(MAIL_URL, payload, 70)
+                # Same host as answers. A hosted pet config must not keep posting to this machine.
+                data = watcher._post_json(_route_url(watcher._cue_url, "/wisp/mail"), payload, 70)
         except Exception:
             data = None
         finally:
@@ -2069,6 +2069,19 @@ def _same_draft(cued, current):
     return len(left) >= 12 and (left[:48] in right or right[:48] in left)
 
 
+def _pet_config_path():
+    """pet.config.json sits next to WeavePet.exe. A frozen build's __file__ does not."""
+
+    candidates = []
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).resolve().with_name("pet.config.json"))
+    candidates.append(Path(__file__).resolve().with_name("pet.config.json"))
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
 def _ask_key(question):
     return " ".join((question or "").replace("\ufeff", "").split()).casefold()
 
@@ -2144,8 +2157,8 @@ class DraftWatch:
         return self._token
 
     def _load_local_config(self):
-        path = Path(__file__).with_name("pet.config.json")
-        if not path.is_file():
+        path = _pet_config_path()
+        if path is None:
             return
         try:
             data = json.loads(path.read_text(encoding="utf-8"))

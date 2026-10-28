@@ -53,6 +53,7 @@ def backfill_public_channels(
     *,
     workspace_domain: str | None = None,
     incremental: bool = False,
+    accept_new: bool = False,
     store=None,
 ) -> None:
     records = open_store(store)
@@ -69,6 +70,10 @@ def backfill_public_channels(
         for channel in page.get("channels") or []:
             if not _is_public_channel(channel):
                 continue
+            if accept_new:
+                from app.graph.policy import ensure_connected_source
+
+                ensure_connected_source(tenant_id, "slack", channel["id"])
             _sync_channel(
                 tenant_id=tenant_id,
                 connection_id=connection_id,

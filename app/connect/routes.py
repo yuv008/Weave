@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import secrets
 import urllib.parse
 from pathlib import Path
@@ -11,12 +12,14 @@ from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 from app.connect.oauth import CARDS, MemoryStateStore, StateMismatch, begin, complete, configured
+from app.connect.setup_code import SetupCodes
 
 log = logging.getLogger("weave.connect")
 PAGE = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
 LANDING = PAGE.with_name("landing.html")
 LOGIN = PAGE.with_name("login.html")
 SIGNUP = PAGE.with_name("signup.html")
+INSTALLER = PAGE.parent / "downloads" / "WeavePetSetup.exe"
 BRAND = {"mark.png", "icon.png", "wisp.svg"}
 SESSION_COOKIE = "weave_session"
 SESSION_MAX_AGE = 14 * 24 * 3600
@@ -26,6 +29,7 @@ _CONNECTABLE = {"slack", "notion", "google", "github"}
 
 def register_connect(app: FastAPI) -> None:
     app.state.oauth_states = MemoryStateStore()
+    app.state.setup_codes = SetupCodes()
     if getattr(app.state, "poll_now", None) is None:
         app.state.poll_now = _noop_poll if app.state.graph is not None or app.state.records is not None else run_poll
 
@@ -120,12 +124,39 @@ def register_connect(app: FastAPI) -> None:
             return JSONResponse({"error": "that company is not yours"}, status_code=403)
         return {"tenant": switched["tenant_id"]}
 
+    @app.get("/downloads/WeavePetSetup.exe")
+    def pet_installer():
+        if not INSTALLER.is_file():
+            return JSONResponse({"error": "the Windows pet installer is not on this server yet"}, status_code=404)
+        return FileResponse(INSTALLER, media_type="application/vnd.microsoft.portable-executable", filename="WeavePetSetup.exe")
+
+    @app.get("/guide")
+    def pet_guide():
+        path = PAGE.parent / "guide.html"
+        if path.is_file():
+            page = FileResponse(path)
+            page.headers["Cache-Control"] = "no-store"
+            return page
+        return JSONResponse({"error": "the pet walkthrough is missing"}, status_code=404)
+
+    @app.get("/guide/media/{name}")
+    def guide_media(name: str):
+        if re.fullmatch(r"[a-z0-9-]+\.png", name) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        root = (PAGE.parent / "guide-media").resolve()
+        path = (root / name).resolve()
+        if path.parent != root or not path.is_file():
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return FileResponse(path, media_type="image/png")
+
     @app.get("/setup")
     def setup_page(request: Request):
         if _session(app, request) is None:
             return RedirectResponse("/login", status_code=303)
         if PAGE.is_file():
-            return FileResponse(PAGE)
+            page = FileResponse(PAGE)
+            page.headers["Cache-Control"] = "no-store"
+            return page
         return JSONResponse({"error": "setup page is missing"}, status_code=404)
 
     @app.get("/landing/{name}")
@@ -257,6 +288,45 @@ def register_connect(app: FastAPI) -> None:
             "pet": {"cue_url": f"{agent}/wisp/cue", "token": token},
         }
 
+    @app.post("/setup/install-code")
+    async def setup_install_code(request: Request):
+        found = _session(app, request)
+        if found is None:
+            return JSONResponse({"error": "sign in"}, status_code=401)
+        tenant = found["tenant_id"]
+        status = _status(app, tenant)
+        ready = [card for card in status["connectors"] if card["id"] in _CONNECTABLE and card["status"] in {"connected", "syncing"}]
+        if not ready:
+            return JSONResponse({"error": "connect a tool first"}, status_code=400)
+        email = found["email"]
+        if not email:
+            return JSONResponse({"error": "the server has no viewer email"}, status_code=400)
+        try:
+            token = _mint(tenant, email, app)
+        except Exception as exc:
+            log.warning("viewer token was not minted (%s)", type(exc).__name__)
+            return JSONResponse({"error": "could not create a viewer token"}, status_code=500)
+        agent = os.environ.get("WEAVE_AGENT_URL", "http://127.0.0.1:8765").rstrip("/")
+        code = secrets.token_urlsafe(18)
+        app.state.setup_codes.put(
+            code,
+            {"cue_url": f"{agent}/wisp/cue", "token": token, "mcp_url": f"{agent}/mcp"},
+        )
+        return {"code": code, "filename": f"WeavePetSetup-{code}.exe"}
+
+    @app.post("/setup/install/redeem")
+    async def setup_install_redeem(request: Request):
+        body = await _body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        code = str(body.get("code") or "")
+        if re.fullmatch(r"[A-Za-z0-9_-]{16,80}", code) is None:
+            return JSONResponse({"error": "that setup code has expired"}, status_code=410)
+        payload = app.state.setup_codes.take(code)
+        if payload is None:
+            return JSONResponse({"error": "that setup code has expired"}, status_code=410)
+        return {"cue_url": payload["cue_url"], "token": payload["token"], "mcp_url": payload["mcp_url"]}
+
     @app.get("/connect/{provider}")
     def connect_start(provider: str, request: Request):
         found = _session(app, request)
@@ -307,7 +377,7 @@ def register_connect(app: FastAPI) -> None:
         return RedirectResponse(f"/setup?connected={provider}{extra}", status_code=302)
 
 
-def run_poll(provider: str, tenant: str) -> None:
+def run_poll(provider: str, tenant: str) -> bool | None:
     """One immediate sync after a connect. Connector errors propagate to the caller."""
 
     if provider == "slack":
@@ -319,9 +389,12 @@ def run_poll(provider: str, tenant: str) -> None:
 
         _notion_once(tenant)
     elif provider == "google":
+        from app.connect.credentials import google_folder_id
         from scripts.run_worker import _drive_once
 
-        _drive_once(tenant)
+        if _drive_once(tenant) or not google_folder_id(tenant):
+            return None
+        return False
     elif provider == "github":
         from scripts.run_worker import _github_once
 
@@ -338,7 +411,8 @@ def _schedule(app, background: BackgroundTasks, provider: str, tenant: str | Non
     def job() -> None:
         store = _store(app)
         try:
-            app.state.poll_now(provider, chosen)
+            if app.state.poll_now(provider, chosen) is False:
+                return
             store.update_status(chosen, provider, "connected")
         except ModuleNotFoundError as exc:
             # This process has no embedding model. The grant is saved; the worker syncs it.
@@ -390,6 +464,7 @@ def _status(app, tenant: str | None = None) -> dict:
         "tenant": tenant,
         "company": str((profile or {}).get("name") or ""),
         "model": "saved" if groq and groq.get("token") else "default",
+        "drive_tester_email": os.environ.get("WEAVE_VIEWER_EMAIL", "").strip(),
         "connectors": cards,
     }
 

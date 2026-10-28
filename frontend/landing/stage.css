@@ -54,6 +54,8 @@ a { color: inherit; }
 
 .brand img { height: 28px; width: auto; display: block; }
 
+.nav { display: flex; align-items: center; gap: 22px; }
+
 .textlink, .go { cursor: pointer; }
 
 .textlink {
@@ -107,6 +109,9 @@ h1 span {
 }
 
 .go:hover { background: #e4e4e7; }
+
+.actions { display: flex; align-items: center; gap: 22px; margin-top: 28px; flex-wrap: wrap; }
+.actions .go { margin-top: 0; }
 
 .stage { padding-bottom: 28px; }
 

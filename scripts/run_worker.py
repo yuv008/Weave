@@ -85,6 +85,7 @@ def _grant_ready(name: str, tenant: str) -> bool:
         github_coordinates,
         google_access_token,
         google_folder_id,
+        google_uses_service_account,
         notion_token,
         notion_workspace_id,
         slack_bot_token,
@@ -96,11 +97,61 @@ def _grant_ready(name: str, tenant: str) -> bool:
     if name == "notion":
         return bool(notion_token(tenant) and notion_workspace_id(tenant))
     if name == "drive":
-        return bool(google_folder_id(tenant) and google_access_token(tenant))
+        if google_access_token(tenant) and google_folder_id(tenant):
+            return True
+        from app.gdrive.client import service_account_configured
+
+        return google_uses_service_account(tenant) and service_account_configured()
     if name == "github":
+        from app.connect.credentials import row
+
+        found = row(tenant, "github") or {}
         owner, repo = github_coordinates(tenant)
-        return bool(owner and repo and github_access_token(tenant))
+        installation = str(found.get("installation_id") or found.get("external_id") or "")
+        return bool(installation or (owner and repo and github_access_token(tenant)))
     return False
+
+
+def _ensure_owner_level(tenant: str) -> None:
+    """A new company owner has no level, so the gate treats them as unknown."""
+
+    if not tenant:
+        return
+    try:
+        from app.graph.client import connect_graph
+        from shared.ids import person_id
+        from shared.pg import connect_pg
+        from shared.schema import Label, Prop
+
+        conn = connect_pg()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT u.email
+                    FROM tenant_membership m
+                    JOIN app_user u ON u.id = m.user_id
+                    WHERE m.tenant_id = %s AND m.role = 'owner'
+                    """,
+                    (tenant,),
+                )
+                emails = [row[0] for row in cur.fetchall() if row and row[0]]
+            conn.commit()
+        finally:
+            conn.close()
+        if not emails:
+            return
+        graph = connect_graph(tenant=tenant)
+        for email in emails:
+            graph.query(
+                f"""
+                MATCH (p:{Label.PERSON} {{{Prop.ID}: $person_id}})
+                SET p.{Prop.LEVEL} = coalesce(p.{Prop.LEVEL}, 0)
+                """,
+                {"person_id": person_id(tenant, email)},
+            )
+    except Exception:
+        log.warning("owner level was not set")
 
 
 def _mark_connected(name: str, tenant: str) -> None:
@@ -132,7 +183,9 @@ def _slack_once(tenant: str | None = None) -> bool:
     client = SlackClient(token)
     graph = connect_graph(tenant=chosen)
     domain = _env("SLACK_WORKSPACE_DOMAIN") or None
+    home = _env("WEAVE_TENANT_ID") or _env("WEAVE_TENANT")
     # incremental keeps channels that already finished their backfill.
+    # A new company has no channels in the config, so its public channels are recorded first.
     backfill_public_channels(
         chosen,
         _env("WEAVE_CONNECTION_ID", "slack-main"),
@@ -141,6 +194,7 @@ def _slack_once(tenant: str | None = None) -> bool:
         graph,
         workspace_domain=domain,
         incremental=True,
+        accept_new=bool(tenant) and chosen != home,
     )
     retry_failures(graph, client, workspace_domain=domain)
     return True
@@ -158,6 +212,9 @@ def _notion_once(tenant: str | None = None) -> bool:
     workspace = notion_workspace_id(tenant) if tenant else notion_workspace_id()
     if not token or not workspace:
         return False
+    from app.graph.policy import ensure_connected_source
+
+    ensure_connected_source(chosen, "notion", workspace)
     version = _env("NOTION_VERSION") or PINNED_NOTION_VERSION
     client = NotionClient(token, version=version)
     graph = connect_graph(tenant=chosen)
@@ -177,19 +234,25 @@ def _drive_once(tenant: str | None = None) -> bool:
     from app.gdrive.worker import poll_folder, retry_drive_failures
     from app.graph.client import connect_graph
 
-    from app.connect.credentials import google_access_token, google_folder_id
+    from app.connect.credentials import google_access_token, google_folder_id, google_uses_service_account
 
-    chosen = tenant or _env("WEAVE_TENANT_ID") or _env("WEAVE_TENANT") or "demo"
+    home = _env("WEAVE_TENANT_ID") or _env("WEAVE_TENANT")
+    chosen = tenant or home or "demo"
     folder = google_folder_id(tenant) if tenant else google_folder_id()
-    if tenant:
-        token = google_access_token(tenant)
-        if not token or not folder:
-            return False
+    if not folder:
+        return False
+    token = google_access_token(tenant) if tenant else google_access_token()
+    if token:
         client = DriveClient(token=token)
-    else:
-        if not folder:
-            return False
+    elif google_uses_service_account(tenant):
         client = drive_client_from_env()
+    else:
+        return False
+    from app.graph.policy import allowed_source, ensure_connected_source
+
+    ensure_connected_source(chosen, "gdrive", folder)
+    if allowed_source("gdrive", folder) is None:
+        return False
     graph = connect_graph(tenant=chosen)
     poll_folder(
         chosen,
@@ -212,19 +275,26 @@ def _github_once(tenant: str | None = None) -> bool:
     chosen = tenant or _env("WEAVE_TENANT_ID") or _env("WEAVE_TENANT") or "demo"
     owner, repo = github_coordinates(tenant) if tenant else github_coordinates()
     token = github_access_token(tenant) if tenant else github_access_token()
-    if not owner or not repo or not token:
+    if not token:
         return False
+    from app.graph.policy import ensure_connected_source
+
     version = _env("GITHUB_API_VERSION") or PINNED_GITHUB_API_VERSION
     client = GitHubClient(token, api_version=version)
+    targets = [(owner, repo)] if owner and repo else client.list_installation_repositories()
+    if not targets:
+        return False
     graph = connect_graph(tenant=chosen)
-    poll_repository(
-        chosen,
-        _env("GITHUB_CONNECTION_ID", "github-main"),
-        owner,
-        repo,
-        client,
-        graph,
-    )
+    for repo_owner, repo_name in targets:
+        ensure_connected_source(chosen, "github", f"{repo_owner}/{repo_name}")
+        poll_repository(
+            chosen,
+            _env("GITHUB_CONNECTION_ID", "github-main"),
+            repo_owner,
+            repo_name,
+            client,
+            graph,
+        )
     retry_github_failures(graph, client)
     return True
 
@@ -288,6 +358,8 @@ def _poll_loop(name: str, once, every: int) -> None:
         tenants = _grant_tenants(name) or [None]
         for tenant in tenants:
             try:
+                if tenant:
+                    _ensure_owner_level(tenant)
                 if once(tenant) and tenant:
                     _mark_connected(name, tenant)
             except Exception:

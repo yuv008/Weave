@@ -10,7 +10,7 @@ from app.connect.credentials import slack_bot_token, use_store
 
 accounts.SKIP_GRAPH = True
 from app.connect.oauth import complete
-from app.connect.routes import _schedule
+from app.connect.routes import _redirect, _schedule
 from app.connect.secrets import MemorySecretStore
 from app.ingest.records import MemoryStore
 from app.main import _run_slack_reply, create_app
@@ -30,6 +30,14 @@ def _signed_in(app, email="owner@north.test", company="North", name="Owner"):
     assert response.status_code == 303
     assert response.headers["location"].endswith("/setup")
     return client
+
+
+def test_google_redirect_uses_the_public_url(monkeypatch):
+    public = "https://we-9a1fc0e727ab4797bb20ad28efef5a43.ecs.ap-southeast-2.on.aws"
+    monkeypatch.setenv("WEAVE_PUBLIC_URL", public)
+    request = SimpleNamespace(base_url="http://test/")
+    for provider in ("google", "slack", "notion", "github"):
+        assert _redirect(request, provider) == f"{public}/connect/{provider}/callback"
 
 
 def test_oauth_state_mismatch_is_rejected(monkeypatch):
@@ -208,4 +216,15 @@ def test_a_connector_error_marks_the_grant_failed(monkeypatch):
     app.state.poll_now = boom
     _schedule(app, _Now(), "notion")
     assert secrets.get("real", "notion")["status"] == "failed"
+    use_store(None)
+
+
+def test_drive_poll_that_does_not_write_stays_syncing(monkeypatch):
+    monkeypatch.setenv("WEAVE_SECRET_KEY", "test-key")
+    secrets = MemorySecretStore()
+    secrets.put("real", "google", "", {"token": "tok", "folder_id": "folder"}, status="syncing")
+    app = _app(secrets)
+    app.state.poll_now = lambda provider, tenant: False
+    _schedule(app, _Now(), "google")
+    assert secrets.get("real", "google")["status"] == "syncing"
     use_store(None)

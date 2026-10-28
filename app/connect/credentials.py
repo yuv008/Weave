@@ -88,11 +88,33 @@ def notion_workspace_id(tenant: str | None = None) -> str:
 
 def google_folder_id(tenant: str | None = None) -> str:
     found = row(tenant, "google")
-    if found and found.get("folder_id"):
-        return str(found["folder_id"])
-    if _explicit(tenant):
+    folder = str((found or {}).get("folder_id") or "").strip()
+    if folder:
+        return folder
+    # A different company must name its own folder. The curated tenant
+    # keeps the service-account folder from the process environment.
+    explicit = _explicit(tenant)
+    home = (os.environ.get("WEAVE_TENANT_ID") or os.environ.get("WEAVE_TENANT") or "").strip()
+    if explicit and explicit != home:
         return ""
     return os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "").strip()
+
+
+def google_uses_service_account(tenant: str | None = None) -> bool:
+    """Read the curated folder with the service account when OAuth cannot."""
+
+    if google_access_token(tenant):
+        return False
+    found = row(tenant, "google")
+    grant_folder = str((found or {}).get("folder_id") or "").strip()
+    env_folder = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "").strip()
+    if grant_folder != env_folder and grant_folder:
+        return False
+    explicit = _explicit(tenant)
+    home = (os.environ.get("WEAVE_TENANT_ID") or os.environ.get("WEAVE_TENANT") or "").strip()
+    if explicit and explicit != home:
+        return False
+    return bool(google_folder_id(tenant))
 
 
 def google_access_token(tenant: str | None = None) -> str:
@@ -106,12 +128,14 @@ def google_access_token(tenant: str | None = None) -> str:
     refresh = str(found.get("refresh_token") or "")
     if token and (not expires or expires > time.time() + 60):
         return token
+    # An expired bearer is rejected by Drive. Callers can use the service
+    # account only when this returns empty.
     if not refresh:
-        return token
+        return ""
     client_id = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
     client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
     if not client_id or not client_secret:
-        return token
+        return ""
     body = urllib.parse.urlencode({
         "client_id": client_id,
         "client_secret": client_secret,
@@ -123,10 +147,10 @@ def google_access_token(tenant: str | None = None) -> str:
         with urllib.request.urlopen(request, timeout=20) as response:
             payload = __import__("json").loads(response.read().decode("utf-8"))
     except Exception:
-        return token
+        return ""
     fresh = str(payload.get("access_token") or "")
     if not fresh:
-        return token
+        return ""
     updated = dict(found)
     updated["token"] = fresh
     updated["expires_at"] = time.time() + int(payload.get("expires_in") or 3600)

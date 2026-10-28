@@ -164,3 +164,129 @@ def test_unknown_drive_folder_is_not_written(graph):
     assert store.get(drive_sync_id("demo", "folder1")) is None
     answer = answer_drive_question(graph, "demo", "folder1", "annual plan")
     assert answer.citations == ()
+
+
+def _google_grant(store, tenant, **payload):
+    store.put(tenant, "google", "", payload, status="connected")
+
+
+def test_expired_google_grant_does_not_keep_the_dead_token(monkeypatch):
+    from app.connect.credentials import google_access_token, google_folder_id, use_store
+    from app.connect.secrets import MemorySecretStore
+
+    monkeypatch.setenv("WEAVE_SECRET_KEY", "test-key")
+    monkeypatch.setenv("WEAVE_TENANT", "real")
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv("GOOGLE_DRIVE_FOLDER_ID", "curated-folder")
+    secrets = MemorySecretStore()
+    _google_grant(
+        secrets,
+        "real",
+        token="dead-token",
+        refresh_token="refresh",
+        expires_at=1,
+        folder_id="curated-folder",
+    )
+    _google_grant(secrets, "pict", token="dead-token", refresh_token="refresh", expires_at=1)
+    use_store(secrets)
+    try:
+        assert google_access_token("real") == ""
+        assert google_folder_id("real") == "curated-folder"
+        assert google_folder_id("pict") == ""
+        secrets.put("real", "google", "", {"token": "dead-token", "refresh_token": "refresh", "expires_at": 1}, status="connected")
+        assert google_folder_id("real") == "curated-folder"
+        assert google_folder_id("pict") == ""
+    finally:
+        use_store(None)
+
+
+def test_curated_tenant_uses_the_service_account_when_the_token_is_expired(monkeypatch):
+    from app.connect.credentials import use_store
+    from app.connect.secrets import MemorySecretStore
+    from scripts.run_worker import _drive_once, _grant_ready
+
+    monkeypatch.setenv("WEAVE_SECRET_KEY", "test-key")
+    monkeypatch.setenv("WEAVE_TENANT", "real")
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv("GOOGLE_DRIVE_FOLDER_ID", "curated-folder")
+    monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_JSON", "{}")
+    secrets = MemorySecretStore()
+    _google_grant(
+        secrets,
+        "real",
+        token="dead-token",
+        refresh_token="refresh",
+        expires_at=1,
+        folder_id="curated-folder",
+    )
+    use_store(secrets)
+    seen = {}
+
+    def load_credentials(path):
+        seen["path"] = path
+        return object()
+
+    def poll(tenant_id, connection_id, folder_id, client, graph, store=None):
+        seen["tenant"] = tenant_id
+        seen["folder"] = folder_id
+        seen["token"] = client._token_value
+        seen["service_account"] = client._credentials is not None
+
+    monkeypatch.setattr("app.gdrive.client._load_credentials", load_credentials)
+    monkeypatch.setattr("app.graph.policy.ensure_connected_source", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.graph.policy.allowed_source", lambda *args, **kwargs: ("gdrive:curated-folder", object()))
+    monkeypatch.setattr("app.graph.client.connect_graph", lambda tenant: object())
+    monkeypatch.setattr("app.gdrive.worker.poll_folder", poll)
+    monkeypatch.setattr("app.gdrive.worker.retry_drive_failures", lambda *args, **kwargs: None)
+    try:
+        assert _grant_ready("drive", "real") is True
+        assert _drive_once("real") is True
+        assert seen["tenant"] == "real"
+        assert seen["folder"] == "curated-folder"
+        assert seen["token"] == ""
+        assert seen["service_account"] is True
+        assert "dead-token" not in seen["path"]
+        secrets.put(
+            "pict",
+            "google",
+            "",
+            {"token": "dead-token", "refresh_token": "refresh", "expires_at": 1, "folder_id": "pict-folder"},
+            status="connected",
+        )
+        assert _grant_ready("drive", "pict") is False
+        assert _drive_once("pict") is False
+        assert seen["tenant"] == "real"
+    finally:
+        use_store(None)
+
+
+def test_a_folder_outside_the_allow_list_is_not_marked_synced(monkeypatch):
+    from app.connect.credentials import use_store
+    from app.connect.secrets import MemorySecretStore
+    from scripts.run_worker import _drive_once
+
+    monkeypatch.setenv("WEAVE_SECRET_KEY", "test-key")
+    monkeypatch.setenv("WEAVE_TENANT", "real")
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv("GOOGLE_DRIVE_FOLDER_ID", "curated-folder")
+    secrets = MemorySecretStore()
+    _google_grant(
+        secrets,
+        "real",
+        token="live-token",
+        expires_at=9_999_999_999,
+        folder_id="curated-folder",
+    )
+    use_store(secrets)
+    called = {}
+    monkeypatch.setattr("app.graph.policy.ensure_connected_source", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.graph.policy.allowed_source", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.gdrive.worker.poll_folder", lambda *args, **kwargs: called.setdefault("poll", True))
+    try:
+        assert _drive_once("real") is False
+        assert "poll" not in called
+    finally:
+        use_store(None)

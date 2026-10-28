@@ -57,6 +57,29 @@ class GitHubClient:
     def get_repo(self, owner: str, repo: str) -> GitHubResult:
         return self._call(f"/repos/{_segment(owner)}/{_segment(repo)}", {})
 
+    def list_installation_repositories(self) -> list[tuple[str, str]]:
+        """Repositories this installation token can read. Owner and name only."""
+
+        found: list[tuple[str, str]] = []
+        page = ""
+        while True:
+            params = {"per_page": "100"}
+            if page:
+                params["page"] = page
+            result = self._call("/installation/repositories", params)
+            payload = result.payload if isinstance(result.payload, dict) else {}
+            for repo in payload.get("repositories") or []:
+                if not isinstance(repo, dict):
+                    continue
+                owner_obj = repo.get("owner") if isinstance(repo.get("owner"), dict) else {}
+                owner = str(owner_obj.get("login") or "")
+                name = str(repo.get("name") or "")
+                if owner and name and "/" not in owner and "/" not in name:
+                    found.append((owner, name))
+            if not result.next_page:
+                return found
+            page = result.next_page
+
     def list_issues(self, owner: str, repo: str, page: str | None, since: str | None) -> GitHubResult:
         params = {
             "state": "all",

@@ -27,7 +27,10 @@
   main { max-width: 760px; margin: 0 auto; padding: 48px 20px 80px; }
   h1 { font-size: 2rem; margin: 0 0 8px; }
   h2 { font-size: 1.1rem; margin: 32px 0 12px; }
-  p { color: var(--muted); }
+  h3 { font-size: 1rem; margin: 20px 0 6px; }
+  p, li { color: var(--muted); }
+  ol { margin: 8px 0 0; padding-left: 1.2rem; }
+  code { color: var(--text); }
   .mark {
     width: 36px; height: 36px; border-radius: 10px; margin-bottom: 16px;
     background: linear-gradient(120deg, var(--purple), var(--blue));
@@ -65,6 +68,12 @@
     cursor: not-allowed;
     pointer-events: none;
   }
+  .button.quiet {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--line);
+  }
+  .hint { margin: 4px 0 0; font-size: 0.9rem; }
   .card { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
   .status { font-size: 0.9rem; color: var(--muted); }
   .status.connected, .status.syncing { color: var(--good); }
@@ -83,6 +92,7 @@
 <main>
   <div class="mark" aria-hidden="true"></div>
   <h1>Set up Weave</h1>
+  <p><a href="/guide">Pet walkthrough</a> — one-click install and what the pet does.</p>
   <p id="who"></p>
   <p>Connect the tools your company already uses. One connection is enough to start. Weave does not show excerpts on this page.</p>
 
@@ -103,6 +113,9 @@
   </div>
 
   <h2>3. Open Weave</h2>
+  <p><button id="pet-setup" class="button" type="button">Download the Windows pet</button></p>
+  <p id="pet-setup-error" class="error"></p>
+  <p>Run the downloaded <code>WeavePetSetup.exe</code>. The file name carries a short-lived code. That one run writes <code>pet.config.json</code>, adds Weave in <code>.cursor/mcp.json</code>, starts the pet, and places the Gmail extension in <code>%LOCALAPPDATA%\Weave\Pet\gmail</code>. A coded file replaces <code>pet.config.json</code> and refreshes Cursor. A file with no code keeps <code>pet.config.json</code> and adds Weave only when that server is missing. After the installer finishes, open <code>chrome://extensions</code>, turn on Developer mode, and load that unpacked <code>gmail</code> folder — this is a required setup step. The Chrome Web Store listing is not yet published; loading the folder unpacked is how you install it now. You do not need the Weave source code. <a href="/guide">Read the pet walkthrough</a> for what each step does.</p>
   <form id="model">
     <label for="model-key">Model key, optional</label>
     <input id="model-key" name="key" type="password" autocomplete="off" placeholder="Leave empty to use the server default">
@@ -112,16 +125,51 @@
   <button id="open" type="button">Open Weave</button>
   <p id="open-error" class="error"></p>
   <div id="result" class="result" hidden>
-    <p>Copy this token into the pet config or Cursor. It is shown once.</p>
-    <pre id="token"></pre>
-    <p>Cursor MCP</p>
+    <p>This token is shown once. The download above already writes <code>pet.config.json</code>. Use this only when that file is missing: save it next to <code>WeavePet.exe</code> and open Weave Pet from the Start menu.</p>
+    <h3>Cursor</h3>
+    <ol>
+      <li>With Weave Pet running, type <code>@bubble</code> and the question in Cursor chat. Approve replaces <code>@bubble</code> with the answer.</li>
+      <li>For Cursor chat, the installer adds the server below to <code>.cursor/mcp.json</code>. The same JSON can be pasted in Settings, then MCP.</li>
+    </ol>
     <pre id="mcp"></pre>
-    <button id="download" type="button">Download pet config</button>
+    <h3>Email</h3>
+    <ol>
+      <li>Keep Weave Pet running.</li>
+      <li>Open <code>chrome://extensions</code>, turn on Developer mode, and load the unpacked folder <code>%LOCALAPPDATA%\Weave\Pet\gmail</code>.</li>
+      <li>In a Gmail draft, type <code>@bubble</code> and the question, then pause. Approve writes the answer into the draft. You still send the email.</li>
+    </ol>
+    <p>Token</p>
+    <pre id="token"></pre>
+    <button id="download" type="button">Download pet.config.json</button>
   </div>
 </main>
 <script>
 const cards = document.getElementById("cards");
 const params = new URLSearchParams(location.search);
+let signedIn = null;
+
+function testerLink() {
+  const inbox = (signedIn && signedIn.testerInbox || "").trim();
+  const email = (signedIn && signedIn.email || "").trim();
+  if (!inbox || !email || inbox.toLowerCase() === email.toLowerCase()) return null;
+  const link = document.createElement("a");
+  link.className = "button quiet";
+  const subject = "Add me as a Weave Google Drive tester";
+  const body = [
+    "Please add me as a test user on the Weave Google OAuth consent screen so I can connect Google Drive.",
+    "",
+    "Email: " + email,
+    "Name: " + (signedIn.name || ""),
+    "Company: " + (signedIn.tenant || ""),
+  ].join("\n");
+  link.href = "https://mail.google.com/mail/?view=cm&fs=1&to=" + encodeURIComponent(inbox)
+    + "&su=" + encodeURIComponent(subject)
+    + "&body=" + encodeURIComponent(body);
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = "Email to be added as a tester";
+  return link;
+}
 
 function cardView(card) {
   const wrap = document.createElement("div");
@@ -135,6 +183,15 @@ function cardView(card) {
   state.className = "status " + card.status;
   state.textContent = card.reason || card.status;
   text.append(title, state);
+  if (card.id === "google" && card.status !== "connected" && card.status !== "syncing") {
+    const mail = testerLink();
+    if (mail) {
+      const note = document.createElement("p");
+      note.className = "hint";
+      note.textContent = "Google Drive is limited to approved testers.";
+      text.append(note, mail);
+    }
+  }
   wrap.append(text);
   if (card.connectable) {
     const link = document.createElement("a");
@@ -195,6 +252,12 @@ async function post(url, body) {
 async function load() {
   const session = await fetch("/session").then((response) => response.ok ? response.json() : null);
   const who = document.getElementById("who");
+  signedIn = session ? {
+    email: session.email,
+    name: session.name,
+    tenant: session.tenant,
+    testerInbox: "",
+  } : null;
   if (session) {
     who.textContent = session.email + " · " + session.tenant;
     if ((session.memberships || []).length > 1) {
@@ -221,6 +284,7 @@ async function load() {
     return;
   }
   const status = await statusResponse.json();
+  if (signedIn) signedIn.testerInbox = status.drive_tester_email || "";
   document.getElementById("company-name").value = status.company || "";
   document.getElementById("model-state").textContent = status.model === "saved" ? "A model key is saved." : "Using the server default.";
   cards.replaceChildren();
@@ -256,6 +320,26 @@ document.getElementById("open").addEventListener("click", async () => {
     document.getElementById("token").textContent = opened.token;
     document.getElementById("mcp").textContent = JSON.stringify(opened.mcp, null, 2);
     document.getElementById("result").hidden = false;
+  } catch (exc) {
+    error.textContent = exc.message;
+  }
+});
+
+document.getElementById("pet-setup").addEventListener("click", async () => {
+  const error = document.getElementById("pet-setup-error");
+  error.textContent = "";
+  try {
+    const minted = await post("/setup/install-code", {});
+    const response = await fetch("/downloads/WeavePetSetup.exe");
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || "the installer is not on this server yet");
+    }
+    const blob = await response.blob();
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = minted.filename;
+    link.click();
   } catch (exc) {
     error.textContent = exc.message;
   }

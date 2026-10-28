@@ -36,6 +36,14 @@ class Transport:
         return status, header, payload
 
 
+def test_installation_repositories_keep_owner_and_name():
+    client, transport, _sleeps = _client([
+        (200, {"repositories": [{"name": "hello", "owner": {"login": "octo"}}]}, {}),
+    ])
+    assert client.list_installation_repositories() == [("octo", "hello")]
+    assert transport.calls[0][0].endswith("/installation/repositories?per_page=100")
+
+
 def _client(responses):
     transport = Transport(responses)
     sleeps = []

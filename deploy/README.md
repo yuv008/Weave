@@ -1,6 +1,6 @@
 # Deploy
 
-The AWS host is [docs/deployment.md](../docs/deployment.md): one edge task and one worker task in `ap-southeast-2`. On 18 October 2026 those tasks and the load balancer were stopped. This folder's Compose file is the local stack.
+The AWS host is [docs/deployment.md](../docs/deployment.md): one edge task and one worker task in `ap-southeast-2`. The public origin is `https://we-9a1fc0e727ab4797bb20ad28efef5a43.ecs.ap-southeast-2.on.aws`. This folder's Compose file is the local stack.
 
 `.env` is gitignored. `api` and `worker` load it with Compose `env_file` and `required: false`, so Compose 2.24 and newer still configure when the file is absent. Older Compose fails `docker compose config` until `.env` exists. Copy `.env.example` if you need a file, and do not commit real values.
 
@@ -21,7 +21,7 @@ cloudflared tunnel --name weave-mcp --hostname <mcp-host> --url http://api:8765
 
 ## Cursor
 
-MCP is `https://<mcp-host>/mcp`. The same host serves answers at `/answer`. `<token>` is a placeholder from `python -m scripts.issue_demo_tokens`. Do not put a real token in this file.
+The Windows installer writes this shape into `%USERPROFILE%\.cursor\mcp.json` and leaves other servers in that file. The hosted URL is the public origin plus `/mcp`. The sample below is the local Compose tunnel. `<token>` is a placeholder. Do not put a real token in this file.
 
 ```json
 {

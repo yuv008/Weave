@@ -134,14 +134,23 @@ class DriveClient:
         return 0.5 * (2 ** (attempt - 1)) * (0.5 + self._random())
 
 
+def service_account_file() -> str:
+    return os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip() or "secrets/gdrive-service-account.json"
+
+
+def service_account_configured() -> bool:
+    if os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip():
+        return True
+    return os.path.isfile(service_account_file())
+
+
 def drive_client_from_env() -> DriveClient:
     from app.connect.credentials import google_access_token
 
     token = google_access_token()
     if token:
         return DriveClient(token=token)
-    path = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip() or "secrets/gdrive-service-account.json"
-    return DriveClient(credentials_file=path)
+    return DriveClient(credentials_file=service_account_file())
 
 
 def _load_credentials(path: str):

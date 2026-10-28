@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weave Pet — walkthrough</title>
+<link rel="icon" href="/brand/icon.png">
+<style>
+  :root {
+    --bg: #0B0F1A;
+    --card: #12182A;
+    --line: rgba(248, 250, 252, 0.12);
+    --text: #F8FAFC;
+    --muted: #A8B3C7;
+    --purple: #7C3AED;
+    --blue: #3B82F6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.55 "Segoe UI", sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 20px 80px; }
+  h1 { font-size: 2rem; margin: 12px 0 8px; }
+  h2 { font-size: 1.15rem; margin: 36px 0 10px; }
+  p, li, td { color: var(--muted); }
+  a { color: #C4B5FD; }
+  code { color: var(--text); }
+  ol { margin: 8px 0 0; padding-left: 1.2rem; }
+  ul { margin: 8px 0 0; padding-left: 1.2rem; }
+  li + li { margin-top: 6px; }
+  .mark { width: 36px; height: 36px; border-radius: 10px; display: block; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-top: 1px solid var(--line); }
+  th { color: var(--text); font-weight: 650; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 4px 16px 8px;
+    margin-top: 12px;
+  }
+  .hero {
+    background: var(--card);
+    border: 1px solid rgba(124, 58, 237, 0.4);
+    border-radius: 14px;
+    padding: 20px 24px;
+    margin: 24px 0 0;
+  }
+  .hero p { color: var(--text); margin: 0; font-size: 1rem; line-height: 1.5; }
+  .hero code { background: rgba(124,58,237,0.15); padding: 1px 5px; border-radius: 4px; }
+  figure { margin: 16px 0 0; }
+  figure img {
+    width: 100%;
+    height: auto;
+    display: block;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #000;
+  }
+  figcaption { margin-top: 8px; color: var(--muted); font-size: 0.92rem; }
+  .use-pair { display: block; }
+</style>
+</head>
+<body>
+<main>
+  <img class="mark" src="/brand/mark.png" alt="">
+  <h1>Weave Pet</h1>
+  <p>The Windows companion for Weave. One installer run connects everything — it configures your login, adds Weave to Cursor's MCP, and opens the pet. You do not need the Weave source code.</p>
+  <p><a href="/setup">Back to setup</a></p>
+
+  <div class="hero">
+    <p>Three steps: <strong>connect a source → download &amp; run the installer → type <code>@bubble</code></strong> in Cursor or Gmail. That's it.</p>
+  </div>
+
+  <h2>1. Connect a source</h2>
+  <ol>
+    <li>Sign in to Weave (or create a company if this is your first time). Enter the company name and save it.</li>
+    <li>Connect at least one tool. Slack, Notion, Google Drive, and GitHub are available. HubSpot is shown but not connectable yet. One connection is enough.</li>
+  </ol>
+  <figure>
+    <img src="/guide/media/sign-in.png" alt="Sign in form with email and password fields and a link to create a company">
+    <figcaption>Sign in with your work email, or choose Create a company if this is your first time.</figcaption>
+  </figure>
+  <figure>
+    <img src="/guide/media/company.png" alt="Company name field with a Save button on the setup page">
+    <figcaption>Enter the company name and save it before connecting tools.</figcaption>
+  </figure>
+  <figure>
+    <img src="/guide/media/connect.png" alt="Setup page showing Slack, Notion, Google Drive, GitHub, and HubSpot connector cards">
+    <figcaption>Connect at least one tool. HubSpot is shown but not connectable yet.</figcaption>
+  </figure>
+
+  <h2>2. Download &amp; run the installer — one click</h2>
+  <p>On the setup page, choose <strong>Download the Windows pet</strong>. The file saves as <code>WeavePetSetup-&lt;code&gt;.exe</code> with a short-lived code (15 minutes). Run it once — that is all you need.</p>
+  <p>That single run does everything:</p>
+  <ul>
+    <li>Redeems the code and writes <code>pet.config.json</code> into <code>%LOCALAPPDATA%\Weave\Pet</code>.</li>
+    <li>Merges the Weave MCP server into <code>%USERPROFILE%\.cursor\mcp.json</code>, leaving your other servers untouched.</li>
+    <li>Places the Gmail extension in <code>%LOCALAPPDATA%\Weave\Pet\gmail</code>.</li>
+    <li>Opens Weave Pet and creates a Start menu entry.</li>
+  </ul>
+  <p>A file named <code>WeavePetSetup-&lt;code&gt;.exe</code> replaces <code>pet.config.json</code> and refreshes the Cursor server. Running <code>WeavePetSetup.exe</code> with no code keeps the existing <code>pet.config.json</code>, and adds Weave in <code>.cursor/mcp.json</code> only when that server is missing.</p>
+  <figure>
+    <img src="/guide/media/install.png" alt="Setup page showing the Download the Windows pet button">
+    <figcaption><strong>Download the Windows pet</strong> mints the code and saves the file. Run it once.</figcaption>
+  </figure>
+  <figure>
+    <img src="/guide/media/config.png" alt="Weave Pet folder with WeavePet.exe and pet.config.json shown by name">
+    <figcaption><code>WeavePet.exe</code> and <code>pet.config.json</code> sit together in <code>%LOCALAPPDATA%\Weave\Pet</code>. Both must be present.</figcaption>
+  </figure>
+
+  <h2>3. Use Weave</h2>
+  <p>Weave Pet works in two places. Both are required — Cursor for writing code and docs, Gmail for composing email. Keep the pet running in both cases.</p>
+
+  <div class="use-pair">
+    <div>
+      <h2 style="margin-top:20px">Cursor <code>@bubble</code></h2>
+      <ol>
+        <li>In <strong>Cursor chat</strong> — the box where you type a message to the agent — type <code>@bubble</code> and your question, then pause.</li>
+        <li><code>@bubble</code> turns purple when the pet sees it. A dot appears on the pet.</li>
+        <li>The answer card opens with the answer, a short quote, and the source.</li>
+        <li>Choose <strong>Approve</strong>. The <code>@bubble</code> sentence is replaced with the answer.</li>
+        <li>Choose <strong>Reject</strong> to close the card without changing what you typed.</li>
+      </ol>
+      <p style="margin-top:10px">The installer also adds Weave as an MCP server in Cursor settings. The Approve and Reject card still comes from Weave Pet, and it works in that chat box.</p>
+    </div>
+    <div>
+      <h2 style="margin-top:20px">Gmail <code>@bubble</code></h2>
+      <ol>
+        <li>In Chrome, open <code>chrome://extensions</code>, turn on Developer mode, and choose <strong>Load unpacked</strong>.</li>
+        <li>Select <code>%LOCALAPPDATA%\Weave\Pet\gmail</code>. The installer placed it there. The Chrome Web Store listing is not yet published — loading the folder unpacked is the only install method right now.</li>
+        <li>Open a Gmail draft. Type <code>@bubble</code> and the question, then pause.</li>
+        <li>The pet shows the card with the answer, a quote, and the source.</li>
+        <li>Choose <strong>Approve</strong>. The answer is written into the draft. You still send the email.</li>
+        <li>Choose <strong>Reject</strong> to leave the draft exactly as typed.</li>
+      </ol>
+      <p style="margin-top:10px">The extension talks to the pet on <code>127.0.0.1:8766</code>. Weave Pet must be running.</p>
+      <figure>
+        <img src="/guide/media/gmail-ext.png" alt="Chrome extensions page with Developer mode on and Load unpacked">
+        <figcaption>Turn on Developer mode, choose Load unpacked, and select <code>%LOCALAPPDATA%\Weave\Pet\gmail</code>.</figcaption>
+      </figure>
+    </div>
+  </div>
+
+  <figure>
+    <img src="/guide/media/pet.png" alt="The purple Weave Pet with a small antenna and blue feet, showing the answer card">
+    <figcaption>A purple dot means an answer is ready. The card opens beside the pet for Approve or Reject, in Cursor chat and in Gmail.</figcaption>
+  </figure>
+
+  <h2>What the pet does</h2>
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>Action</th><th>What happens</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>It follows your typing</td><td>While you type, the pet stays near the text caret and looks toward the pointer.</td></tr>
+        <tr><td>Left-click and drag</td><td>Moves the pet and leaves it where you drop it. It stops following the caret.</td></tr>
+        <tr><td>Right-click the body</td><td>The pet gives a short poke.</td></tr>
+        <tr><td>Double right-click</td><td>Switches companion. The shapes are Wisp, Knot, Loaf, Pebble, Spark, and Spindle. The choice is remembered.</td></tr>
+        <tr><td>Ctrl+Alt+.</td><td>Brings the pet to the pointer and lets it follow the caret again.</td></tr>
+        <tr><td>Ctrl+Alt+W</td><td>Closes the pet.</td></tr>
+        <tr><td>Purple dot</td><td>An answer is ready. The card then opens beside the pet.</td></tr>
+        <tr><td>Approve</td><td>In Cursor chat, replaces the <code>@bubble</code> sentence. If that sentence is already gone, the pet adds the answer to the chat, pastes it, or copies it and says "Copied — paste it into the chat." In Gmail, writes the answer into the draft and does not send the email.</td></tr>
+        <tr><td>Reject</td><td>Closes the card and does not change what you typed. The same note is not offered again for 10 minutes.</td></tr>
+        <tr><td>Eyes look down</td><td>You pinned the pet and then moved on. It is waiting.</td></tr>
+        <tr><td>It peeks</td><td>You pinned the pet, and you are typing somewhere else on the screen.</td></tr>
+        <tr><td>Weave didn't answer</td><td>The company service did not return an answer. "Weave didn't answer in time" means the wait ran out. Reject the card and ask again.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Troubleshooting</h2>
+  <ul>
+    <li><strong>Pet asks for <code>pet.config.json</code>:</strong> the login file is missing from <code>%LOCALAPPDATA%\Weave\Pet</code>. On the setup page, choose <strong>Download the Windows pet</strong> again — a fresh installer writes a new file. Or choose <strong>Open Weave</strong>, download the file manually, and save it next to <code>WeavePet.exe</code>, then reopen the pet from the Start menu.</li>
+    <li><strong>No card after <code>@bubble</code> in Cursor:</strong> make sure Weave Pet is running. If the pet is running and no card appears, the company notes may not contain a matching answer — try a more specific question.</li>
+    <li><strong>Gmail does not respond:</strong> the extension only works when Weave Pet is running. Check that <code>%LOCALAPPDATA%\Weave\Pet\gmail</code> is loaded in <code>chrome://extensions</code> and that Weave Pet is open.</li>
+    <li><strong>Install code expired:</strong> the code in the file name lasts 15 minutes. Go back to the setup page, choose <strong>Download the Windows pet</strong> again, and run the new file.</li>
+  </ul>
+</main>
+</body>
+</html>

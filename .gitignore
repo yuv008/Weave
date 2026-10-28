@@ -16,3 +16,6 @@ weave.egg-info/
 cursor-wisp/desktop/*.dll
 .neon
 node_modules/
+# Built pet installer: served from disk and copied into the image, not versioned.
+frontend/downloads/*.exe
+frontend/downloads/~*.DDF

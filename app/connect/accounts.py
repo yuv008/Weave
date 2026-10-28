@@ -265,6 +265,13 @@ class PostgresAccountStore:
         except AccountError:
             conn.rollback()
             raise
+        except Exception as exc:
+            conn.rollback()
+            if (getattr(exc, "sqlstate", None) or getattr(exc, "pgcode", None)) != "23505":
+                raise
+            # Two signups passed the checks above at once. The unique indexes pick one.
+            constraint = getattr(getattr(exc, "diag", None), "constraint_name", None) or ""
+            raise AccountError("registered" if "email" in constraint or tenant == "real" else "taken") from exc
         finally:
             conn.close()
         return raw, _row(user_id, cleaned, display, tenant, [{"tenant": tenant, "role": "owner"}])

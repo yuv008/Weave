@@ -118,9 +118,11 @@
   <p>Run the downloaded <code>WeavePetSetup.exe</code>. The file name carries a short-lived code. That one run writes <code>pet.config.json</code>, adds Weave in <code>.cursor/mcp.json</code>, starts the pet, and places the Gmail extension in <code>%LOCALAPPDATA%\Weave\Pet\gmail</code>. A coded file replaces <code>pet.config.json</code> and refreshes Cursor. A file with no code keeps <code>pet.config.json</code> and adds Weave only when that server is missing. After the installer finishes, open <code>chrome://extensions</code>, turn on Developer mode, and load that unpacked <code>gmail</code> folder — this is a required setup step. The Chrome Web Store listing is not yet published; loading the folder unpacked is how you install it now. You do not need the Weave source code. <a href="/guide">Read the pet walkthrough</a> for what each step does.</p>
   <form id="model">
     <label for="model-key">Model key, optional</label>
-    <input id="model-key" name="key" type="password" autocomplete="off" placeholder="Leave empty to use the server default">
+    <input id="model-key" name="key" type="password" autocomplete="off" placeholder="Your Groq key (gsk_...)">
     <button type="submit">Save key</button>
+    <button id="model-remove" class="button quiet" type="button" hidden>Remove key</button>
     <p id="model-state" class="status"></p>
+    <p id="model-error" class="error"></p>
   </form>
   <button id="open" type="button">Open Weave</button>
   <p id="open-error" class="error"></p>
@@ -291,7 +293,7 @@ async function load() {
   const status = await statusResponse.json();
   if (signedIn) signedIn.testerInbox = status.drive_tester_email || "";
   document.getElementById("company-name").value = status.company || "";
-  document.getElementById("model-state").textContent = status.model === "saved" ? "A model key is saved." : "Using the server default.";
+  showModel(status);
   cards.replaceChildren();
   (status.connectors || []).forEach(cardView);
   if (params.get("error")) {
@@ -310,9 +312,14 @@ document.getElementById("company").addEventListener("submit", async (event) => {
 
 document.getElementById("model").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const saved = await post("/setup/model", { key: document.getElementById("model-key").value });
-  document.getElementById("model-key").value = "";
-  document.getElementById("model-state").textContent = saved.model === "saved" ? "A model key is saved." : "Using the server default.";
+  const error = document.getElementById("model-error");
+  error.textContent = "";
+  try {
+    showModel(await post("/setup/model", { key: document.getElementById("model-key").value }));
+    document.getElementById("model-key").value = "";
+  } catch (exc) {
+    error.textContent = exc.message;
+  }
 });
 
 let pet = null;
@@ -350,6 +357,23 @@ document.getElementById("pet-setup").addEventListener("click", async () => {
   } catch (exc) {
     error.textContent = exc.message;
   }
+});
+
+function showModel(status) {
+  const state = document.getElementById("model-state");
+  if (status.model === "own") {
+    state.textContent = "Answers use your Groq key.";
+  } else if (status.model === "failed") {
+    state.textContent = "Groq rejected your saved key. Save a new one.";
+  } else {
+    const used = typeof status.shared_used_today === "number" ? " (" + status.shared_used_today + " used today)" : "";
+    state.textContent = "Answers use the shared key, with a daily limit" + used + ". Save your own Groq key to remove the limit.";
+  }
+  document.getElementById("model-remove").hidden = status.model === "shared";
+}
+
+document.getElementById("model-remove").addEventListener("click", async () => {
+  showModel(await post("/setup/model", { remove: true }));
 });
 
 function day(value) {

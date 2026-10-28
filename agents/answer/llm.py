@@ -19,6 +19,8 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -358,15 +360,17 @@ class GroqLLM:
     """Groq's OpenAI-compatible chat API. The key is sent only as a bearer token."""
 
     def __init__(self, *, model: str, api_key: str, base_url: str = GROQ_URL, http=None,
-                 env_name: str = "GROQ_API_KEY", rpm: int = 30, clock=None, sleep=None):
+                 env_name: str = "GROQ_API_KEY", rpm: int = 30, clock=None, sleep=None, own_bucket: bool = False):
         if not api_key:
             raise RuntimeError(f"{env_name} is not set")
         self.model = model or DEFAULT_GROQ_MODEL
+        self.rpm = rpm
         self._api_key = api_key
         self._url = base_url or GROQ_URL
         self._http = http or _groq_http
-        # A fake clock stays on its own bucket so tests do not drain the process limiter.
-        self._bucket = TokenBucket(rpm, clock=clock, sleep=sleep) if clock or sleep else _shared_bucket(rpm)
+        # A fake clock, or a company's own key, gets its own bucket so it does not drain the process limiter.
+        own = own_bucket or clock or sleep
+        self._bucket = TokenBucket(rpm, clock=clock, sleep=sleep) if own else _shared_bucket(rpm)
 
     def __repr__(self) -> str:
         return f"GroqLLM(model={self.model!r})"
@@ -440,6 +444,108 @@ def _groq_http(url: str, headers: dict, body: bytes) -> tuple[int, bytes]:
         return exc.code, exc.read()
 
 
+_TENANT: ContextVar[str | None] = ContextVar("weave_llm_tenant", default=None)
+_SAVED_KEY_TTL = 300.0
+_saved_keys: dict[str, tuple[float, str]] = {}
+_saved_lock = threading.Lock()
+
+
+class KeyRejected(RuntimeError):
+    """Groq refused a company's own key. The caller is not moved onto the server key."""
+
+
+@contextmanager
+def using_tenant(tenant: str | None):
+    """Model calls inside this block bill ``tenant``'s own Groq key when it saved one."""
+
+    token = _TENANT.set(tenant)
+    try:
+        yield
+    finally:
+        _TENANT.reset(token)
+
+
+def saved_key(tenant: str | None) -> str:
+    """The Groq key a company saved on /setup, or ''. Cached for a few minutes per company."""
+
+    if not tenant:
+        return ""
+    now = time.monotonic()
+    with _saved_lock:
+        hit = _saved_keys.get(tenant)
+        if hit is not None and now - hit[0] < _SAVED_KEY_TTL:
+            return hit[1]
+    try:
+        from app.connect.credentials import row
+
+        found = row(tenant, "groq") or {}
+        key = str(found.get("token") or "") if found.get("status") != "failed" else ""
+    except Exception:
+        key = ""
+    with _saved_lock:
+        _saved_keys[tenant] = (now, key)
+    return key
+
+
+def forget_saved_key(tenant: str) -> None:
+    with _saved_lock:
+        _saved_keys.pop(tenant, None)
+
+
+class TenantKeyLLM:
+    """The company's own Groq key when it saved one, the server key otherwise.
+
+    The company comes from ``using_tenant``. A rejected company key marks the
+    saved grant failed and raises ``KeyRejected``; it never falls back to the
+    server key, so a company's usage is never moved onto the server bill.
+    """
+
+    def __init__(self, shared: GroqLLM, *, key_for: Callable[[str | None], str] = saved_key):
+        self.shared = shared
+        self.model = shared.model
+        self._key_for = key_for
+        self._clients: dict[str, GroqLLM] = {}
+        self._lock = threading.Lock()
+
+    def __repr__(self) -> str:
+        return f"TenantKeyLLM(model={self.model!r})"
+
+    def client_for(self, tenant: str | None) -> GroqLLM:
+        key = self._key_for(tenant)
+        if not key:
+            return self.shared
+        with self._lock:
+            client = self._clients.get(key)
+            if client is None:
+                client = GroqLLM(model=self.shared.model, api_key=key, base_url=self.shared._url,
+                                 http=self.shared._http, rpm=self.shared.rpm, own_bucket=True)
+                self._clients[key] = client
+        return client
+
+    def complete(self, messages, tools=None, json_schema=None) -> LLMReply:
+        tenant = _TENANT.get()
+        client = self.client_for(tenant)
+        try:
+            return client.complete(messages, tools, json_schema)
+        except RuntimeError as exc:
+            if client is self.shared or "(401)" not in str(exc):
+                raise
+            _mark_key_failed(tenant)
+            raise KeyRejected("the company's Groq key was rejected; save a new one on /setup") from exc
+
+
+def _mark_key_failed(tenant: str | None) -> None:
+    if not tenant:
+        return
+    forget_saved_key(tenant)
+    try:
+        from app.connect.credentials import current_store
+
+        current_store().update_status(tenant, "groq", "failed")
+    except Exception:
+        pass
+
+
 def build_components(cfg: WeaveConfig, llm: LLM | None = None):
     """Router, planner and composer for ``answer.llm.provider``; ``none`` is the rule-based set."""
 
@@ -448,7 +554,7 @@ def build_components(cfg: WeaveConfig, llm: LLM | None = None):
         if provider == "none":
             return RuleRouter(), RulePlanner(), TemplateComposer()
         if provider == "groq":
-            llm = GroqLLM.from_config(cfg)
+            llm = TenantKeyLLM(GroqLLM.from_config(cfg))
         else:
             raise NotImplementedError(f"no adapter for LLM provider {provider!r}; use groq or none")
         # The playbook picks the tools. The model writes the sentence; a citation-shaped

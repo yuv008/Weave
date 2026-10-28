@@ -52,6 +52,15 @@ _SENTENCE_LINE = (
 
 
 def mail(agent, runtime, principal, to: str, subject: str, body: str) -> dict[str, str]:
+    """A draft or one sentence for ``@bubble``, on the company's own model key when it saved one."""
+
+    from agents.answer.llm import using_tenant
+
+    with using_tenant(principal.tenant):
+        return _mail(agent, runtime, principal, to, subject, body)
+
+
+def _mail(agent, runtime, principal, to: str, subject: str, body: str) -> dict[str, str]:
     """A draft or one sentence for ``@bubble``, or ``unsure`` when nothing visible matches."""
 
     mode = bubble_mode(body)

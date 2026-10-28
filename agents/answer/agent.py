@@ -44,10 +44,18 @@ class AnswerAgent:
         self.composer = composer
         self.agent = agent
 
-    def answer(self, principal: Principal, question: str, *, conversation_id: str | None = None,
-               request_id: str | None = None, intent: Intent | str | None = None,
-               subject_ids: list[str] | None = None, fact_ids: list[str] | None = None,
-               ensure_conversation: bool = False, persist: bool = True) -> AnswerCard:
+    def answer(self, principal: Principal, question: str, **kwargs) -> AnswerCard:
+        """Answer ``question`` as ``principal``, on the principal company's own model key when it saved one."""
+
+        from agents.answer.llm import using_tenant
+
+        with using_tenant(principal.tenant):
+            return self._answer(principal, question, **kwargs)
+
+    def _answer(self, principal: Principal, question: str, *, conversation_id: str | None = None,
+                request_id: str | None = None, intent: Intent | str | None = None,
+                subject_ids: list[str] | None = None, fact_ids: list[str] | None = None,
+                ensure_conversation: bool = False, persist: bool = True) -> AnswerCard:
         """Answer ``question`` as ``principal``.
 
         Internal callers (the watcher handoff) may fix the ``intent`` (the

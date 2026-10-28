@@ -51,6 +51,9 @@ class MemorySecretStore:
             "updated_at": datetime.now(UTC),
         }
 
+    def delete(self, tenant: str, provider: str) -> None:
+        self.rows.pop((tenant, provider), None)
+
     def update_status(self, tenant: str, provider: str, status: str) -> None:
         row = self.rows.get((tenant, provider))
         if row is not None:
@@ -121,6 +124,15 @@ class PostgresSecretStore:
                     """,
                     (tenant, provider, external_id or "", blob, scopes or "", status or "connected"),
                 )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def delete(self, tenant: str, provider: str) -> None:
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM connection_secret WHERE tenant_id = %s AND provider = %s", (tenant, provider))
             conn.commit()
         finally:
             conn.close()

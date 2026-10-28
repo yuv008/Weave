@@ -5,7 +5,9 @@ import logging
 import os
 import re
 import secrets
+import urllib.error
 import urllib.parse
+import urllib.request
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, Request
@@ -212,17 +214,33 @@ def register_connect(app: FastAPI) -> None:
         body = await _body(request)
         if isinstance(body, JSONResponse):
             return body
+        tenant = found["tenant_id"]
+        if body.get("remove") is True:
+            try:
+                _store(app).delete(tenant, "groq")
+            except Exception as exc:
+                log.warning("model key was not removed (%s)", type(exc).__name__)
+                return JSONResponse({"error": "could not remove the model key"}, status_code=503)
+            return {"model": "shared"}
         key = str(body.get("key") or "").strip()
         if not key:
-            return {"model": "default"}
+            return JSONResponse({"error": "paste a Groq key"}, status_code=400)
         if len(key) > 400:
             return JSONResponse({"error": "that key is too long"}, status_code=400)
+        checker = getattr(app.state, "groq_check", None) or _groq_key_works
         try:
-            _put(app, "groq", "groq", {"token": key}, status="connected", tenant=found["tenant_id"])
+            works = checker(key)
+        except Exception as exc:
+            log.warning("model key was not checked (%s)", type(exc).__name__)
+            return JSONResponse({"error": "could not reach Groq; try again"}, status_code=503)
+        if not works:
+            return JSONResponse({"error": "Groq rejected that key"}, status_code=400)
+        try:
+            _put(app, "groq", "groq", {"token": key}, status="connected", tenant=tenant)
         except Exception as exc:
             log.warning("model key was not saved (%s)", type(exc).__name__)
             return JSONResponse({"error": "could not save the model key"}, status_code=503)
-        return {"model": "saved"}
+        return {"model": "own"}
 
     @app.post("/setup/google/folder")
     async def setup_folder(request: Request, background: BackgroundTasks):
@@ -490,13 +508,53 @@ def _status(app, tenant: str | None = None) -> dict:
             "connectable": provider in _CONNECTABLE and ready and status == "disconnected",
             "needs": needs,
         })
+    if groq and groq.get("token"):
+        model = "failed" if groq.get("status") == "failed" else "own"
+    else:
+        model = "shared"
     return {
         "tenant": tenant,
         "company": str((profile or {}).get("name") or ""),
-        "model": "saved" if groq and groq.get("token") else "default",
+        "model": model,
+        "shared_used_today": _shared_used_today(app, tenant) if model != "own" else None,
         "drive_tester_email": os.environ.get("WEAVE_VIEWER_EMAIL", "").strip(),
         "connectors": cards,
     }
+
+
+def _shared_used_today(app, tenant: str) -> int | None:
+    """Requests this company made on the server key today, or ``None`` when it cannot be read."""
+
+    if getattr(app.state, "pg_connect", None) is None and not getattr(app.state, "live_db", False):
+        return None
+    try:
+        conn = _pg(app)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT calls FROM model_usage WHERE tenant_id = %s AND day = current_date", (tenant,))
+                row = cur.fetchone()
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        return None
+    return int(row[0]) if row else 0
+
+
+def _groq_key_works(key: str) -> bool:
+    """True when Groq accepts ``key``. 401 and 403 are a rejected key; other failures raise."""
+
+    request = urllib.request.Request(
+        "https://api.groq.com/openai/v1/models",
+        headers={"Authorization": f"Bearer {key}", "User-Agent": "weave-setup"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return response.status == 200
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return False
+        raise
 
 
 def _tenant(app, request: Request | None = None) -> str:

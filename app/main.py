@@ -164,6 +164,8 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI()
     app.state.graph = graph
+    # Postgres is the store only for the live app, not for a test app given a graph or store.
+    app.state.live_db = graph is None and store is None and bool(os.environ.get("DATABASE_URL"))
     if store is not None:
         app.state.records = store
     elif graph is not None:

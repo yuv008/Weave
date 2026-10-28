@@ -32,6 +32,8 @@ class LLMConfig(BaseModel):
     """The agents' model. ``groq`` calls Groq; ``none`` runs the rule-based router, planner and composer.
 
     ``rpm`` caps Groq calls in this process. A full bucket waits for a free slot.
+    ``shared_daily_cap`` limits /answer and /wisp/mail per company per day on the
+    server key; a company with its own key, and the home company, are not counted.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -41,6 +43,7 @@ class LLMConfig(BaseModel):
     base_url: str | None = None
     api_key_env: str | None = None
     rpm: int = Field(default=30, gt=0)
+    shared_daily_cap: int | None = Field(default=200, gt=0)
 
 
 class AnswerConfig(BaseModel):

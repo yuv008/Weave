@@ -12,6 +12,7 @@ always comes from the token. ``GET /ops`` is outside that auth: it checks
 import hashlib
 import json
 import logging
+import os
 import threading
 import time
 import uuid
@@ -252,6 +253,44 @@ def build_server(runtime: Runtime) -> Server:
     )
 
 
+SHARED_CAP_MESSAGE = "today's shared model limit is used up; save your own Groq key on /setup"
+_COUNT_SHARED = """
+INSERT INTO model_usage (tenant_id, day, calls) VALUES (%s, current_date, 1)
+ON CONFLICT (tenant_id, day) DO UPDATE SET calls = model_usage.calls + 1
+RETURNING calls
+"""
+
+
+def _shared_cap_reached(runtime: Runtime, tenant: str) -> bool:
+    """Count one request on the server key. True when ``tenant`` is over today's cap.
+
+    A company with its own key and the home company are not counted. A failed count lets
+    the request through; the per-token limit still applies.
+    """
+
+    from agents.answer.llm import saved_key
+
+    llm = runtime.cfg.answer.llm
+    home = (os.environ.get("WEAVE_TENANT") or os.environ.get("WEAVE_TENANT_ID") or "").strip()
+    if llm.provider != "groq" or not llm.shared_daily_cap or runtime.pg_connect is None:
+        return False
+    if tenant == home or saved_key(tenant):
+        return False
+    try:
+        conn = runtime.pg_connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(_COUNT_SHARED, (tenant,))
+                calls = cur.fetchone()[0]
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.warning("shared model usage was not counted (%s)", type(exc).__name__)
+        return False
+    return calls > llm.shared_daily_cap
+
+
 async def _json_body(request: Request) -> dict | None:
     try:
         body = await request.json()
@@ -277,6 +316,8 @@ def answer_routes(runtime: Runtime, agent) -> list[Route]:
             return PlainTextResponse(f"question must be 1-{MAX_QUESTION_CHARS} characters", status_code=400)
         if conversation_id is not None and not isinstance(conversation_id, str):
             return PlainTextResponse("conversation_id must be a string", status_code=400)
+        if await anyio.to_thread.run_sync(_shared_cap_reached, runtime, caller.principal.tenant):
+            return PlainTextResponse(SHARED_CAP_MESSAGE, status_code=429)
         try:
             card = await anyio.to_thread.run_sync(
                 lambda: agent.answer(
@@ -359,6 +400,8 @@ def mail_routes(runtime: Runtime, agent) -> list[Route]:
             return PlainTextResponse("to, subject, and body must be strings", status_code=400)
         if not text.strip() or len(text) > MAX_MAIL_CHARS:
             return PlainTextResponse(f"body must be 1-{MAX_MAIL_CHARS} characters", status_code=400)
+        if await anyio.to_thread.run_sync(_shared_cap_reached, runtime, caller.principal.tenant):
+            return PlainTextResponse(SHARED_CAP_MESSAGE, status_code=429)
         try:
             payload = await anyio.to_thread.run_sync(
                 lambda: mail(agent, runtime, caller.principal, to, subject, text)

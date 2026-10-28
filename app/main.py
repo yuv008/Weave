@@ -35,8 +35,8 @@ def _bearer(request: Request) -> str:
     return header.split(" ", 1)[1].strip()
 
 
-def _viewer_known(token: str) -> bool:
-    """True when ``token`` matches a live ``api_token`` row. Failures stay a refusal."""
+def _viewer_tenant(token: str) -> str | None:
+    """The company of a live ``api_token`` row. Failures stay a refusal."""
 
     try:
         from agents.gate.resolve import hash_token
@@ -46,25 +46,34 @@ def _viewer_known(token: str) -> bool:
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT 1 FROM api_token WHERE token_sha256 = %s AND revoked_at IS NULL",
+                    "SELECT tenant_id FROM api_token WHERE token_sha256 = %s AND revoked_at IS NULL",
                     (hash_token(token),),
                 )
-                return cur.fetchone() is not None
+                row = cur.fetchone()
+                return str(row[0]) if row and row[0] else None
         finally:
             conn.close()
     except Exception:
-        return False
+        return None
 
 
-def _deny_unless_viewer(app, request: Request):
+def _viewer(app, request: Request) -> str | JSONResponse:
+    """The token's company, or a 401. The env tenant is never used here."""
+
     token = _bearer(request)
-    if not token:
-        return JSONResponse({"error": "not authorized"}, status_code=401)
     checker = app.state.viewer_auth
-    allowed = checker(token) if checker is not None else _viewer_known(token)
-    if not allowed:
+    tenant = (checker(token) if checker is not None else _viewer_tenant(token)) if token else None
+    if not isinstance(tenant, str) or not tenant:
         return JSONResponse({"error": "not authorized"}, status_code=401)
-    return None
+    return tenant
+
+
+def _company_graph(app, tenant: str):
+    if app.state.graph is not None:
+        return app.state.graph
+    from app.graph.client import connect_graph
+
+    return connect_graph(tenant=tenant)
 
 
 def _slack_event_tenant(app, payload: dict) -> str | None:
@@ -301,24 +310,19 @@ def create_app(
 
     @app.post("/slack/decisions")
     async def slack_decisions(request: Request):
-        denied = _deny_unless_viewer(app, request)
-        if denied is not None:
-            return denied
+        tenant = _viewer(app, request)
+        if isinstance(tenant, JSONResponse):
+            return tenant
         try:
             payload = await request.json()
         except json.JSONDecodeError:
             return JSONResponse({"error": "invalid json"}, status_code=400)
         if not isinstance(payload, dict):
             return JSONResponse({"error": "invalid json"}, status_code=400)
-        target = app.state.graph
-        if target is None:
-            from app.graph.client import connect_graph
-
-            target = connect_graph()
         try:
             decisions = channel_decisions(
-                target,
-                app.state.tenant_id,
+                _company_graph(app, tenant),
+                tenant,
                 payload.get("channel_id") or "",
                 payload.get("statement") or "",
                 payload.get("quote") or "",
@@ -328,22 +332,17 @@ def create_app(
         return {"decisions": [decision.as_dict() for decision in decisions]}
 
     async def _claim(request: Request, handler):
-        denied = _deny_unless_viewer(app, request)
-        if denied is not None:
-            return denied
+        tenant = _viewer(app, request)
+        if isinstance(tenant, JSONResponse):
+            return tenant
         try:
             payload = await request.json()
         except json.JSONDecodeError:
             return JSONResponse({"error": "invalid json"}, status_code=400)
         if not isinstance(payload, dict):
             return JSONResponse({"error": "invalid json"}, status_code=400)
-        target = app.state.graph
-        if target is None:
-            from app.graph.client import connect_graph
-
-            target = connect_graph()
         try:
-            return handler(target, _records(app), app.state.tenant_id, payload)
+            return handler(_company_graph(app, tenant), _records(app), tenant, payload)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 

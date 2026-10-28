@@ -98,8 +98,8 @@ def test_twenty_first_match_is_absent(graph):
     assert _message("provider A at 1", "1").node_id not in ids
 
 
-def _allow(token: str) -> bool:
-    return token == "viewer"
+def _allow(token: str) -> str | None:
+    return TENANT if token == "viewer" else None
 
 
 def _client(graph):

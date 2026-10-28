@@ -27,13 +27,20 @@ def allowed_source(system: str, container: str, tenant_id: str | None = None) ->
     return group, policy
 
 
-def ensure_connected_source(tenant_id: str, system: str, container: str) -> None:
-    """Remember a source a tenant just connected, so the next poll can write it."""
+def ensure_connected_source(tenant_id: str, system: str, container: str, *, org_wide: bool = True) -> None:
+    """Remember a source a tenant just connected, so the next poll can write it.
+
+    ``org_wide=False`` keeps the source to the company owners, and narrows a row
+    that was org-wide. It never widens a narrowed row.
+    """
 
     if not tenant_id or not container:
         return
     group = acl_group(system, container)
-    if load_config().sources.get(group) is not None or _connected_policy(tenant_id, group) is not None:
+    if load_config().sources.get(group) is not None:
+        return
+    existing = _connected_policy(tenant_id, group)
+    if existing is not None and (org_wide or not existing.org_wide):
         return
     authority = load_config().authority.get(system)
     if authority is None:
@@ -43,9 +50,9 @@ def ensure_connected_source(tenant_id: str, system: str, container: str) -> None
         min_level=0,
         cascade_policy="manual",
         authority=authority,
-        org_wide=True,
+        org_wide=org_wide,
     )
-    if not _store_connected(tenant_id, group, policy):
+    if not _store_connected(tenant_id, group, policy, system):
         return
     _connected[(tenant_id, group)] = policy
 
@@ -87,8 +94,11 @@ def _connected_policy(tenant_id: str, group: str) -> SourcePolicy | None:
     return policy
 
 
-def _store_connected(tenant_id: str, group: str, policy: SourcePolicy) -> bool:
+def _store_connected(tenant_id: str, group: str, policy: SourcePolicy, system: str) -> bool:
+    """Write the row. A narrowed source also gets its owner memberships and a new ACL epoch, in one transaction."""
+
     try:
+        from shared.ids import person_id
         from shared.pg import connect_pg
 
         with connect_pg() as conn:
@@ -98,7 +108,7 @@ def _store_connected(tenant_id: str, group: str, policy: SourcePolicy) -> bool:
                     INSERT INTO connected_source
                         (tenant_id, acl_group, name, min_level, cascade_policy, authority, org_wide)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (tenant_id, acl_group) DO NOTHING
+                    ON CONFLICT (tenant_id, acl_group) DO UPDATE SET org_wide = EXCLUDED.org_wide
                     """,
                     (
                         tenant_id,
@@ -110,6 +120,32 @@ def _store_connected(tenant_id: str, group: str, policy: SourcePolicy) -> bool:
                         policy.org_wide,
                     ),
                 )
+                if not policy.org_wide:
+                    cur.execute(
+                        """
+                        SELECT u.email FROM tenant_membership AS m
+                        JOIN app_user AS u ON u.id = m.user_id
+                        WHERE m.tenant_id = %s AND m.role = 'owner'
+                        """,
+                        (tenant_id,),
+                    )
+                    for (email,) in cur.fetchall():
+                        cur.execute(
+                            """
+                            INSERT INTO group_membership (tenant_id, person_id, acl_group, source_system)
+                            VALUES (%s, %s, %s, %s)
+                            ON CONFLICT (tenant_id, person_id, acl_group) DO NOTHING
+                            """,
+                            (tenant_id, person_id(tenant_id, email), group, system),
+                        )
+                    cur.execute(
+                        """
+                        INSERT INTO tenant_acl (tenant_id, acl_epoch) VALUES (%s, 1)
+                        ON CONFLICT (tenant_id) DO UPDATE
+                        SET acl_epoch = tenant_acl.acl_epoch + 1, updated_at = now()
+                        """,
+                        (tenant_id,),
+                    )
             conn.commit()
     except Exception:
         return False

@@ -281,12 +281,16 @@ def _github_once(tenant: str | None = None) -> bool:
 
     version = _env("GITHUB_API_VERSION") or PINNED_GITHUB_API_VERSION
     client = GitHubClient(token, api_version=version)
-    targets = [(owner, repo)] if owner and repo else client.list_installation_repositories()
+    if owner and repo:
+        targets = [(owner, repo, _repo_is_private(client, owner, repo))]
+    else:
+        targets = client.list_installation_repositories()
     if not targets:
         return False
     graph = connect_graph(tenant=chosen)
-    for repo_owner, repo_name in targets:
-        ensure_connected_source(chosen, "github", f"{repo_owner}/{repo_name}")
+    for repo_owner, repo_name, private in targets:
+        # A private repository is readable by the company owner only, not the whole company.
+        ensure_connected_source(chosen, "github", f"{repo_owner}/{repo_name}", org_wide=not private)
         poll_repository(
             chosen,
             _env("GITHUB_CONNECTION_ID", "github-main"),
@@ -297,6 +301,16 @@ def _github_once(tenant: str | None = None) -> bool:
         )
     retry_github_failures(graph, client)
     return True
+
+
+def _repo_is_private(client, owner: str, repo: str) -> bool:
+    """A lookup that fails, or does not say ``private: false``, counts as private."""
+
+    try:
+        payload = client.get_repo(owner, repo).payload
+    except Exception:
+        return True
+    return not (isinstance(payload, dict) and payload.get("private") is False)
 
 
 def _every() -> int:

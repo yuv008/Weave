@@ -36,11 +36,18 @@ class Transport:
         return status, header, payload
 
 
-def test_installation_repositories_keep_owner_and_name():
+def test_installation_repositories_keep_owner_name_and_privacy():
     client, transport, _sleeps = _client([
-        (200, {"repositories": [{"name": "hello", "owner": {"login": "octo"}}]}, {}),
+        (200, {"repositories": [
+            {"name": "hello", "owner": {"login": "octo"}},
+            {"name": "open", "owner": {"login": "octo"}, "private": False},
+            {"name": "secret", "owner": {"login": "octo"}, "private": True},
+        ]}, {}),
     ])
-    assert client.list_installation_repositories() == [("octo", "hello")]
+    # A repository that does not say private: false counts as private.
+    assert client.list_installation_repositories() == [
+        ("octo", "hello", True), ("octo", "open", False), ("octo", "secret", True),
+    ]
     assert transport.calls[0][0].endswith("/installation/repositories?per_page=100")
 
 

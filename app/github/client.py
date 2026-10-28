@@ -57,10 +57,13 @@ class GitHubClient:
     def get_repo(self, owner: str, repo: str) -> GitHubResult:
         return self._call(f"/repos/{_segment(owner)}/{_segment(repo)}", {})
 
-    def list_installation_repositories(self) -> list[tuple[str, str]]:
-        """Repositories this installation token can read. Owner and name only."""
+    def list_installation_repositories(self) -> list[tuple[str, str, bool]]:
+        """Repositories this installation token can read: owner, name, and whether it is private.
 
-        found: list[tuple[str, str]] = []
+        A repository without ``private: false`` counts as private, so a missing field narrows access.
+        """
+
+        found: list[tuple[str, str, bool]] = []
         page = ""
         while True:
             params = {"per_page": "100"}
@@ -75,7 +78,7 @@ class GitHubClient:
                 owner = str(owner_obj.get("login") or "")
                 name = str(repo.get("name") or "")
                 if owner and name and "/" not in owner and "/" not in name:
-                    found.append((owner, name))
+                    found.append((owner, name, repo.get("private") is not False))
             if not result.next_page:
                 return found
             page = result.next_page

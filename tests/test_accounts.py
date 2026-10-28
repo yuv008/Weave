@@ -121,7 +121,75 @@ def test_slack_team_routes_to_its_tenant(monkeypatch):
     secrets = MemorySecretStore()
     secrets.put("north", "slack", "TNORTH", {"token": "xoxb-north"}, status="connected")
     app = _app(secrets)
+    app.state.workspace_id = "TREAL"
     use_store(secrets)
     assert _slack_event_tenant(app, {"team_id": "TNORTH"}) == "north"
-    assert _slack_event_tenant(app, {"team_id": "TOTHER"}) == "real"
+    assert _slack_event_tenant(app, {"team_id": "TREAL"}) == "real"
+    # A workspace no company connected does not fall back to the env company.
+    assert _slack_event_tenant(app, {"team_id": "TOTHER"}) is None
+    assert _slack_event_tenant(app, {}) is None
     use_store(None)
+
+
+class _Unique(Exception):
+    sqlstate = "23505"
+
+    def __init__(self, constraint):
+        super().__init__(constraint)
+        self.diag = type("Diag", (), {"constraint_name": constraint})()
+
+
+class _RacedConn:
+    """The checks find nothing, then the insert hits a unique index."""
+
+    def __init__(self, constraint):
+        self.constraint = constraint
+        self.rolled_back = False
+
+    def cursor(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=()):
+        if sql.startswith("INSERT INTO tenant_membership"):
+            raise _Unique(self.constraint)
+
+    def fetchone(self):
+        return None
+
+    def commit(self):
+        raise AssertionError("a raced signup must not commit")
+
+    def rollback(self):
+        self.rolled_back = True
+
+    def close(self):
+        pass
+
+
+def test_a_raced_signup_is_refused_by_the_unique_index(monkeypatch):
+    import pytest
+
+    for constraint, code in (("tenant_membership_one_owner", "taken"), ("app_user_email_key", "registered")):
+        conn = _RacedConn(constraint)
+        monkeypatch.setattr(accounts, "_connect", lambda: conn)
+        monkeypatch.setattr(accounts, "hash_password", lambda secret: "hashed")
+        with pytest.raises(accounts.AccountError) as caught:
+            accounts.PostgresAccountStore().signup(
+                email="ada@north.test", password="correct-horse", name="Ada", company="North",
+            )
+        assert caught.value.code == code
+        assert conn.rolled_back
+
+
+def test_one_owner_index_is_in_the_migrations():
+    from pathlib import Path
+
+    sql = (Path(__file__).resolve().parents[1] / "migrations" / "011_one_owner.sql").read_text(encoding="utf-8")
+    assert "UNIQUE INDEX IF NOT EXISTS tenant_membership_one_owner" in sql
+    assert "WHERE role = 'owner'" in sql

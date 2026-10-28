@@ -261,7 +261,7 @@ def test_mention_through_http_replies_once():
         signing_secret=SECRET, tenant_id="acme", connection_id="c", workspace_id="T",
         reply_claims=claims, slack_runner=lambda payload: seen.append(payload["event_id"]),
     ))
-    payload = _event("channel", user="U0SAM", channel="C1", event_id="Ev-http")
+    payload = {**_event("channel", user="U0SAM", channel="C1", event_id="Ev-http"), "team_id": "T"}
     assert _post(client, payload).status_code == 200
     assert _post(client, payload).status_code == 200
     assert seen == ["Ev-http"]

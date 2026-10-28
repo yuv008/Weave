@@ -228,3 +228,78 @@ def test_drive_poll_that_does_not_write_stays_syncing(monkeypatch):
     _schedule(app, _Now(), "google")
     assert secrets.get("real", "google")["status"] == "syncing"
     use_store(None)
+
+
+def _github_env(monkeypatch):
+    monkeypatch.setenv("WEAVE_SECRET_KEY", "test-key")
+    monkeypatch.setenv("GITHUB_APP_SLUG", "weave-test")
+    monkeypatch.setenv("GITHUB_APP_CLIENT_ID", "client")
+    monkeypatch.setenv("GITHUB_APP_CLIENT_SECRET", "secret")
+
+
+def _github_http(reachable):
+    """GitHub as seen by a user who can reach the installs in ``reachable``."""
+
+    def http(url, fields, headers=None):
+        if url == "https://github.com/login/oauth/access_token":
+            assert fields["code"] == "user-code"
+            return {"access_token": "ghu_user"}
+        assert url.startswith("https://api.github.com/user/installations")
+        assert headers["Authorization"] == "Bearer ghu_user"
+        return {"total_count": len(reachable), "installations": [{"id": int(i)} for i in reachable]}
+
+    return http
+
+
+def _github_callback(app, secrets, query, http, tenant="north"):
+    app.state.oauth_states.put("gh-state", tenant, "github")
+    return complete("github", "gh-state", query, app.state.oauth_states, secrets,
+                    redirect_uri="http://test/connect/github/callback", http=http)
+
+
+def test_github_install_the_user_can_reach_is_saved(monkeypatch):
+    _github_env(monkeypatch)
+    secrets = MemorySecretStore()
+    app = _app(secrets)
+    http = _github_http({"111"})
+    _github_callback(app, secrets, {"installation_id": "111", "code": "user-code"}, http)
+    assert secrets.get("north", "github")["installation_id"] == "111"
+    use_store(None)
+
+
+def test_a_forged_github_install_id_is_refused(monkeypatch):
+    import pytest
+
+    _github_env(monkeypatch)
+    secrets = MemorySecretStore()
+    app = _app(secrets)
+    with pytest.raises(ValueError):
+        _github_callback(app, secrets, {"installation_id": "999", "code": "user-code"}, _github_http({"111"}))
+    with pytest.raises(ValueError):
+        _github_callback(app, secrets, {"installation_id": "111"}, _github_http({"111"}))
+    assert secrets.get("north", "github") is None
+    use_store(None)
+
+
+def test_a_github_install_held_by_another_company_is_refused(monkeypatch):
+    import pytest
+
+    _github_env(monkeypatch)
+    secrets = MemorySecretStore()
+    secrets.put("real", "github", "111", {"installation_id": "111"}, status="connected")
+    app = _app(secrets)
+    with pytest.raises(ValueError):
+        _github_callback(app, secrets, {"installation_id": "111", "code": "user-code"}, _github_http({"111"}))
+    assert secrets.get("north", "github") is None
+    use_store(None)
+
+
+def test_github_connect_needs_the_app_client_secret(monkeypatch):
+    from app.connect.oauth import configured
+
+    monkeypatch.setenv("GITHUB_APP_SLUG", "weave-test")
+    monkeypatch.delenv("GITHUB_APP_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GITHUB_APP_CLIENT_SECRET", raising=False)
+    assert configured("github")[0] is False
+    _github_env(monkeypatch)
+    assert configured("github") == (True, "")

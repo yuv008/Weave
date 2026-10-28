@@ -12,8 +12,8 @@ TENANT = "tenant1"
 AUTH = {"authorization": "Bearer viewer"}
 
 
-def _allow(token: str) -> bool:
-    return token == "viewer"
+def _allow(token: str) -> str | None:
+    return TENANT if token == "viewer" else None
 
 
 def _message(excerpt: str) -> CanonicalMessage:
@@ -137,3 +137,38 @@ def test_claim_without_a_token_is_rejected(graph):
         json={"channel_id": "C1", "statement": "Ship", "quote": "Ship"},
     )
     assert response.status_code == 401
+
+
+def test_a_claim_uses_the_token_company_not_the_env_company(monkeypatch):
+    opened, seen = [], []
+
+    class Empty:
+        def query(self, query, params=None):
+            seen.append(dict(params or {}))
+            return type("Result", (), {"result_set": []})()
+
+    def connect_graph(tenant=None):
+        opened.append(tenant)
+        return Empty()
+
+    monkeypatch.setattr("app.graph.client.connect_graph", connect_graph)
+    app = create_app(
+        tenant_id="real", store=MemoryStore(),
+        viewer_auth=lambda token: "north" if token == "north-token" else None,
+    )
+    client = TestClient(app)
+    body = {"item_id": "real:slack:message:C1:20", "statement": "Ship SSO", "quote": "Ship",
+            "due": "2026-10-20", "progress": "open"}
+
+    response = client.post("/claims/commitment", headers={"authorization": "Bearer north-token"}, json=body)
+    decisions = client.post(
+        "/slack/decisions", headers={"authorization": "Bearer north-token"},
+        json={"channel_id": "C1", "statement": "Use SSO", "quote": "Use SSO"},
+    )
+
+    assert response.status_code == 400
+    assert decisions.status_code == 200
+    assert opened == ["north", "north"]
+    assert seen and all(params.get("tenant_id", "north") == "north" for params in seen)
+    unknown = client.post("/claims/commitment", headers={"authorization": "Bearer other"}, json=body)
+    assert unknown.status_code == 401

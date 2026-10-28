@@ -76,7 +76,9 @@ def configured(provider: str) -> tuple[bool, str]:
             return True, ""
         return False, "The Google app is not set on the server."
     if provider == "github":
-        if os.environ.get("GITHUB_APP_SLUG", "").strip():
+        # The client id and secret prove which installs the signed-in user can reach.
+        names = ("GITHUB_APP_SLUG", "GITHUB_APP_CLIENT_ID", "GITHUB_APP_CLIENT_SECRET")
+        if all(os.environ.get(name, "").strip() for name in names):
             return True, ""
         return False, "The GitHub App is not set on the server."
     return False, "This connector is not available."
@@ -127,6 +129,8 @@ def complete(provider: str, state: str, query: dict, states: MemoryStateStore, s
 
     tenant = states.pop(state or "", provider)
     payload, external, scopes = exchange(provider, query, redirect_uri, http=http)
+    if provider == "github" and store.find_tenant("github", external) not in (None, tenant):
+        raise ValueError("that GitHub install belongs to another company")
     previous = None
     try:
         previous = store.get(tenant, provider)
@@ -184,17 +188,53 @@ def exchange(provider: str, query: dict, redirect_uri: str, *, http=None) -> tup
         return body, "", GOOGLE_SCOPE
     if provider == "github":
         installation = str(query.get("installation_id") or "")
-        if not installation:
+        code = str(query.get("code") or "")
+        if not installation.isdigit() or not code:
+            raise ValueError("github")
+        # The browser chooses installation_id. Only an install the signed-in
+        # GitHub user can reach is accepted.
+        payload = _form("https://github.com/login/oauth/access_token", {
+            "client_id": os.environ.get("GITHUB_APP_CLIENT_ID", "").strip(),
+            "client_secret": os.environ.get("GITHUB_APP_CLIENT_SECRET", "").strip(),
+            "code": code,
+        }, headers={"Accept": "application/json"}, http=http)
+        user_token = str(payload.get("access_token") or "")
+        if not user_token or installation not in _github_user_installations(user_token, http=http):
             raise ValueError("github")
         return {"installation_id": installation}, installation, ""
     raise ValueError(provider)
 
 
-def _form(url: str, fields: dict, *, http=None) -> dict:
+def _github_user_installations(user_token: str, *, http=None) -> set[str]:
+    headers = {
+        "Authorization": f"Bearer {user_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "weave",
+    }
+    found: set[str] = set()
+    for page in range(1, 11):
+        payload = _get(f"https://api.github.com/user/installations?per_page=100&page={page}", headers=headers, http=http)
+        rows = payload.get("installations") if isinstance(payload.get("installations"), list) else []
+        found.update(str(row.get("id")) for row in rows if isinstance(row, dict) and row.get("id"))
+        if len(rows) < 100:
+            break
+    return found
+
+
+def _get(url: str, *, headers: dict, http=None) -> dict:
+    if http is not None:
+        return http(url, None, headers)
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _form(url: str, fields: dict, *, headers: dict | None = None, http=None) -> dict:
     if http is not None:
         return http(url, fields)
     data = urllib.parse.urlencode(fields).encode()
-    request = urllib.request.Request(url, data=data)
+    request = urllib.request.Request(url, data=data, headers=headers or {})
     with urllib.request.urlopen(request, timeout=20) as response:
         return json.loads(response.read().decode("utf-8"))
 

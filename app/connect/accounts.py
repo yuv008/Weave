@@ -20,6 +20,7 @@ MAX_FAILURES = 8
 WINDOW = timedelta(minutes=15)
 VERIFY_FOR = timedelta(hours=24)
 RESET_FOR = timedelta(minutes=30)
+INVITE_FOR = timedelta(days=7)
 _RESERVED = {"acme", "real"}
 
 
@@ -95,8 +96,8 @@ def choose_tenant(email: str, company: str) -> str:
     return company_slug(company)
 
 
-def remember_owner(tenant: str, email: str, name: str) -> None:
-    """Write the owner Person on ``co:{tenant}``. A missing graph does not undo signup."""
+def remember_person(tenant: str, email: str, name: str) -> None:
+    """Write an owner or member Person on ``co:{tenant}`` at level 0. A missing graph does not undo signup."""
 
     if SKIP_GRAPH or not tenant or tenant == "acme":
         return
@@ -132,6 +133,7 @@ class MemoryAccountStore:
         self.auto_verify = auto_verify
         self.verified: set[str] = set()
         self.email_tokens: dict[str, dict] = {}
+        self.invites: dict[str, dict] = {}
         self.users: dict[str, dict] = {}
         self.by_email: dict[str, str] = {}
         self.memberships: dict[str, list[tuple[str, str]]] = {}
@@ -194,6 +196,89 @@ class MemoryAccountStore:
             return None
         row["tenant_id"] = tenant
         return self._public(row["user_id"], tenant)
+
+    def create_invite(self, tenant: str, email: str, invited_by: str) -> str:
+        cleaned = clean_email(email)
+        member = self.by_email.get(cleaned)
+        if member and tenant in dict(self.memberships.get(member, [])):
+            raise AccountError("member")
+        raw = secrets.token_urlsafe(32)
+        self.invites[hash_session(raw)] = {
+            "tenant_id": tenant, "email": cleaned, "invited_by": invited_by,
+            "expires_at": datetime.now(UTC) + INVITE_FOR, "accepted": False, "revoked": False,
+        }
+        return raw
+
+    def invite_info(self, raw: str) -> dict | None:
+        row = self.invites.get(hash_session(raw or ""))
+        if row is None or row["accepted"] or row["revoked"] or row["expires_at"] <= datetime.now(UTC):
+            return None
+        return {"tenant_id": row["tenant_id"], "email": row["email"]}
+
+    def accept_invite(self, raw: str, user_id: str) -> str | None:
+        """Add a signed-in account to the invite's company when the addresses match."""
+
+        info = self.invite_info(raw)
+        user = self.users.get(user_id)
+        if info is None or user is None or user["email"] != info["email"]:
+            return None
+        rows = self.memberships.setdefault(user_id, [])
+        if info["tenant_id"] not in dict(rows):
+            rows.append((info["tenant_id"], "member"))
+        self.verified.add(user_id)
+        self.invites[hash_session(raw)]["accepted"] = True
+        return info["tenant_id"]
+
+    def join_with_invite(self, raw: str, *, name: str, password: str) -> tuple[str, dict]:
+        """A new account for the invited address, already a member and verified."""
+
+        display = clean_name(name)
+        secret = check_password(password)
+        info = self.invite_info(raw)
+        if info is None:
+            raise AccountError("expired")
+        if info["email"] in self.by_email:
+            raise AccountError("registered")
+        user_id = "user_" + secrets.token_urlsafe(9)
+        self.users[user_id] = {"email": info["email"], "name": display, "password_hash": hash_password(secret)}
+        self.by_email[info["email"]] = user_id
+        self.memberships[user_id] = [(info["tenant_id"], "member")]
+        self.verified.add(user_id)
+        self.invites[hash_session(raw)]["accepted"] = True
+        return self._open(user_id)
+
+    def members(self, tenant: str) -> dict:
+        people = [
+            {"user_id": user_id, "email": self.users[user_id]["email"], "name": self.users[user_id]["name"], "role": role}
+            for user_id, rows in self.memberships.items() for team, role in rows if team == tenant
+        ]
+        now = datetime.now(UTC)
+        pending = [
+            {"id": key[:8], "email": row["email"], "expires": row["expires_at"].isoformat()}
+            for key, row in self.invites.items()
+            if row["tenant_id"] == tenant and not row["accepted"] and not row["revoked"] and row["expires_at"] > now
+        ]
+        return {"members": sorted(people, key=lambda item: (item["role"] != "owner", item["email"])), "invites": pending}
+
+    def revoke_invite(self, tenant: str, short: str) -> bool:
+        for key, row in self.invites.items():
+            if key[:8] == short and row["tenant_id"] == tenant and not row["accepted"] and not row["revoked"]:
+                row["revoked"] = True
+                return True
+        return False
+
+    def remove_member(self, tenant: str, user_id: str) -> str | None:
+        """Drop a member (never the owner) and end their sessions in this company. Returns their email."""
+
+        rows = self.memberships.get(user_id, [])
+        if dict(rows).get(tenant) != "member":
+            return None
+        self.memberships[user_id] = [row for row in rows if row[0] != tenant]
+        self.sessions = {
+            key: row for key, row in self.sessions.items()
+            if not (row["user_id"] == user_id and row["tenant_id"] == tenant)
+        }
+        return self.users[user_id]["email"]
 
     def logout(self, token: str) -> None:
         self.sessions.pop(hash_session(token), None)
@@ -417,6 +502,169 @@ class PostgresAccountStore:
         current["role"] = _role(current["memberships"], tenant)
         return current
 
+    def create_invite(self, tenant: str, email: str, invited_by: str) -> str:
+        cleaned = clean_email(email)
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT 1 FROM tenant_membership AS m JOIN app_user AS u ON u.id = m.user_id
+                    WHERE m.tenant_id = %s AND u.email = %s
+                    """,
+                    (tenant, cleaned),
+                )
+                if cur.fetchone():
+                    raise AccountError("member")
+                raw = secrets.token_urlsafe(32)
+                cur.execute(
+                    "INSERT INTO invite (token_sha256, tenant_id, email, invited_by, expires_at) VALUES (%s, %s, %s, %s, %s)",
+                    (hash_session(raw), tenant, cleaned, invited_by, datetime.now(UTC) + INVITE_FOR),
+                )
+            conn.commit()
+        except AccountError:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        return raw
+
+    def invite_info(self, raw: str) -> dict | None:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(_LIVE_INVITE, (hash_session(raw or ""),))
+                found = cur.fetchone()
+            conn.commit()
+        finally:
+            conn.close()
+        return {"tenant_id": found[0], "email": found[1]} if found else None
+
+    def accept_invite(self, raw: str, user_id: str) -> str | None:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(_LIVE_INVITE + " FOR UPDATE", (hash_session(raw or ""),))
+                found = cur.fetchone()
+                cur.execute("SELECT email FROM app_user WHERE id = %s", (user_id,))
+                user = cur.fetchone()
+                if found is None or user is None or user[0] != found[1]:
+                    conn.rollback()
+                    return None
+                tenant = found[0]
+                cur.execute(
+                    "INSERT INTO tenant_membership (user_id, tenant_id, role) VALUES (%s, %s, 'member') ON CONFLICT DO NOTHING",
+                    (user_id, tenant),
+                )
+                cur.execute("UPDATE invite SET accepted_at = now() WHERE token_sha256 = %s", (hash_session(raw),))
+                cur.execute(
+                    "UPDATE app_user SET email_verified_at = coalesce(email_verified_at, now()) WHERE id = %s", (user_id,)
+                )
+            conn.commit()
+        finally:
+            conn.close()
+        return tenant
+
+    def join_with_invite(self, raw: str, *, name: str, password: str) -> tuple[str, dict]:
+        display = clean_name(name)
+        secret = check_password(password)
+        user_id = "user_" + secrets.token_urlsafe(9)
+        session = secrets.token_urlsafe(32)
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(_LIVE_INVITE + " FOR UPDATE", (hash_session(raw or ""),))
+                found = cur.fetchone()
+                if found is None:
+                    raise AccountError("expired")
+                tenant, email = found
+                cur.execute("SELECT 1 FROM app_user WHERE email = %s", (email,))
+                if cur.fetchone():
+                    raise AccountError("registered")
+                cur.execute(
+                    "INSERT INTO app_user (id, email, name, password_hash, email_verified_at) VALUES (%s, %s, %s, %s, now())",
+                    (user_id, email, display, hash_password(secret)),
+                )
+                cur.execute(
+                    "INSERT INTO tenant_membership (user_id, tenant_id, role) VALUES (%s, %s, 'member')", (user_id, tenant)
+                )
+                cur.execute("UPDATE invite SET accepted_at = now() WHERE token_sha256 = %s", (hash_session(raw),))
+                cur.execute(
+                    "INSERT INTO app_session (token_sha256, user_id, tenant_id, expires_at) VALUES (%s, %s, %s, %s)",
+                    (hash_session(session), user_id, tenant, datetime.now(UTC) + timedelta(days=SESSION_DAYS)),
+                )
+            conn.commit()
+        except AccountError:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        return session, _row(user_id, email, display, tenant, [{"tenant": tenant, "role": "member"}], verified=True)
+
+    def members(self, tenant: str) -> dict:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT u.id, u.email, u.name, m.role FROM tenant_membership AS m
+                    JOIN app_user AS u ON u.id = m.user_id
+                    WHERE m.tenant_id = %s ORDER BY m.role <> 'owner', u.email
+                    """,
+                    (tenant,),
+                )
+                people = [{"user_id": r[0], "email": r[1], "name": r[2], "role": r[3]} for r in cur.fetchall()]
+                cur.execute(
+                    """
+                    SELECT left(token_sha256, 8), email, expires_at FROM invite
+                    WHERE tenant_id = %s AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()
+                    ORDER BY created_at DESC
+                    """,
+                    (tenant,),
+                )
+                pending = [{"id": r[0], "email": r[1], "expires": r[2].isoformat()} for r in cur.fetchall()]
+            conn.commit()
+        finally:
+            conn.close()
+        return {"members": people, "invites": pending}
+
+    def revoke_invite(self, tenant: str, short: str) -> bool:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE invite SET revoked_at = now()
+                    WHERE tenant_id = %s AND left(token_sha256, 8) = %s AND accepted_at IS NULL AND revoked_at IS NULL
+                    """,
+                    (tenant, short),
+                )
+                done = (cur.rowcount or 0) > 0
+            conn.commit()
+        finally:
+            conn.close()
+        return done
+
+    def remove_member(self, tenant: str, user_id: str) -> str | None:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM tenant_membership AS m USING app_user AS u
+                    WHERE m.user_id = u.id AND m.tenant_id = %s AND m.user_id = %s AND m.role = 'member'
+                    RETURNING u.email
+                    """,
+                    (tenant, user_id),
+                )
+                found = cur.fetchone()
+                if found is not None:
+                    cur.execute("DELETE FROM app_session WHERE user_id = %s AND tenant_id = %s", (user_id, tenant))
+            conn.commit()
+        finally:
+            conn.close()
+        return found[0] if found else None
+
     def logout(self, token: str) -> None:
         _write("DELETE FROM app_session WHERE token_sha256 = %s", (hash_session(token),))
 
@@ -495,6 +743,12 @@ def _row(user_id: str, email: str, name: str, tenant: str, memberships: list[dic
         "role": _role(memberships, tenant),
         "memberships": memberships,
     }
+
+
+_LIVE_INVITE = (
+    "SELECT tenant_id, email FROM invite WHERE token_sha256 = %s"
+    " AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()"
+)
 
 
 def _role(memberships: list[dict], tenant: str) -> str:

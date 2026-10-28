@@ -24,6 +24,7 @@ LOGIN = PAGE.with_name("login.html")
 SIGNUP = PAGE.with_name("signup.html")
 FORGOT = PAGE.with_name("forgot.html")
 RESET = PAGE.with_name("reset.html")
+INVITE = PAGE.with_name("invite.html")
 INSTALLER = PAGE.parent / "downloads" / "WeavePetSetup.exe"
 BRAND = {"mark.png", "icon.png", "wisp.svg"}
 SESSION_COOKIE = "weave_session"
@@ -80,7 +81,7 @@ def register_connect(app: FastAPI) -> None:
 
     @app.post("/signup")
     async def signup_submit(request: Request, background: BackgroundTasks):
-        from app.connect.accounts import AccountError, remember_owner
+        from app.connect.accounts import AccountError, remember_person
 
         fields = _form(await request.body())
         try:
@@ -99,7 +100,7 @@ def register_connect(app: FastAPI) -> None:
             )
         except Exception as exc:
             log.warning("company profile was not saved (%s)", type(exc).__name__)
-        remember_owner(found["tenant_id"], found["email"], found["name"])
+        remember_person(found["tenant_id"], found["email"], found["name"])
         if found.get("verified") is False:
             _send_verify(app, request, background, found)
         response = RedirectResponse("/setup", status_code=303)
@@ -282,8 +283,9 @@ def register_connect(app: FastAPI) -> None:
     @app.post("/setup/company")
     async def setup_company(request: Request):
         found = _session(app, request)
-        if found is None:
-            return JSONResponse({"error": "sign in"}, status_code=401)
+        denied = _deny(found, owner=True)
+        if denied is not None:
+            return denied
         body = await _body(request)
         if isinstance(body, JSONResponse):
             return body
@@ -300,7 +302,7 @@ def register_connect(app: FastAPI) -> None:
     @app.post("/setup/model")
     async def setup_model(request: Request):
         found = _session(app, request)
-        denied = _deny(found)
+        denied = _deny(found, owner=True)
         if denied is not None:
             return denied
         body = await _body(request)
@@ -337,7 +339,7 @@ def register_connect(app: FastAPI) -> None:
     @app.post("/setup/google/folder")
     async def setup_folder(request: Request, background: BackgroundTasks):
         found = _session(app, request)
-        denied = _deny(found)
+        denied = _deny(found, owner=True)
         if denied is not None:
             return denied
         body = await _body(request)
@@ -354,7 +356,7 @@ def register_connect(app: FastAPI) -> None:
     @app.post("/setup/github/repo")
     async def setup_repo(request: Request, background: BackgroundTasks):
         found = _session(app, request)
-        denied = _deny(found)
+        denied = _deny(found, owner=True)
         if denied is not None:
             return denied
         body = await _body(request)
@@ -458,6 +460,125 @@ def register_connect(app: FastAPI) -> None:
             return JSONResponse({"error": "could not revoke"}, status_code=503)
         return {"revoked": revoked}
 
+    @app.post("/setup/invites")
+    async def setup_invite(request: Request, background: BackgroundTasks):
+        from app.connect.accounts import AccountError
+
+        found = _session(app, request)
+        denied = _deny(found, owner=True)
+        if denied is not None:
+            return denied
+        body = await _body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        tenant = found["tenant_id"]
+        try:
+            raw = app.state.accounts.create_invite(tenant, str(body.get("email") or ""), found["user_id"])
+        except AccountError as exc:
+            message = "that person is already in the company" if exc.code == "member" else "enter a valid email"
+            return JSONResponse({"error": message}, status_code=400)
+        info = app.state.accounts.invite_info(raw)
+        company = str((_safe_get(_store(app), tenant, "profile") or {}).get("name") or tenant)
+        link = _link(request, "/invite", raw)
+        background.add_task(
+            send_quietly, app.state.mailer, info["email"], f"Join {company} on Weave",
+            f"{found['name']} invited you to {company} on Weave, the company's searchable memory.\n\n"
+            f"Join here:\n{link}\n\n"
+            "The link works for 7 days. If you were not expecting this, ignore this email.\n",
+        )
+        return {"invited": info["email"]}
+
+    @app.get("/setup/members")
+    def setup_members(request: Request):
+        found = _session(app, request)
+        denied = _deny(found, owner=True)
+        if denied is not None:
+            return denied
+        return app.state.accounts.members(found["tenant_id"])
+
+    @app.post("/setup/invites/revoke")
+    async def setup_invite_revoke(request: Request):
+        found = _session(app, request)
+        denied = _deny(found, owner=True)
+        if denied is not None:
+            return denied
+        body = await _body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        short = str(body.get("id") or "")
+        if re.fullmatch(r"[0-9a-f]{8}", short) is None:
+            return JSONResponse({"error": "pick an invite"}, status_code=400)
+        return {"revoked": app.state.accounts.revoke_invite(found["tenant_id"], short)}
+
+    @app.post("/setup/members/remove")
+    async def setup_member_remove(request: Request):
+        found = _session(app, request)
+        denied = _deny(found, owner=True)
+        if denied is not None:
+            return denied
+        body = await _body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        tenant = found["tenant_id"]
+        email = app.state.accounts.remove_member(tenant, str(body.get("user_id") or ""))
+        if email is None:
+            return JSONResponse({"error": "that person is not a member here"}, status_code=400)
+        try:
+            # Their Weave tokens for this company stop too.
+            _revoke_tokens(app, tenant, email, None)
+        except Exception as exc:
+            log.warning("removed member's tokens were not revoked (%s)", type(exc).__name__)
+        return {"removed": email}
+
+    @app.get("/invite")
+    def invite_page():
+        if not INVITE.is_file():
+            return JSONResponse({"error": "page is missing"}, status_code=404)
+        return FileResponse(INVITE)
+
+    @app.get("/invite/info")
+    def invite_info(token: str = ""):
+        info = app.state.accounts.invite_info(token)
+        if info is None:
+            return JSONResponse({"error": "that invite has expired"}, status_code=410)
+        profile = _safe_get(_store(app), info["tenant_id"], "profile") or {}
+        return {"email": info["email"], "company": str(profile.get("name") or info["tenant_id"])}
+
+    @app.post("/invite/accept")
+    async def invite_accept(request: Request):
+        from app.connect.accounts import remember_person
+
+        token = _form(await request.body()).get("token", "")
+        back = "/invite?" + urllib.parse.urlencode({"token": token})
+        found = _session(app, request)
+        if found is None:
+            return RedirectResponse(back + "&error=signin", status_code=303)
+        info = app.state.accounts.invite_info(token)
+        tenant = app.state.accounts.accept_invite(token, found["user_id"])
+        if tenant is None:
+            return RedirectResponse(back + ("&error=email" if info else "&error=expired"), status_code=303)
+        app.state.accounts.switch(request.cookies.get(SESSION_COOKIE, ""), tenant)
+        remember_person(tenant, found["email"], found["name"])
+        return RedirectResponse("/setup", status_code=303)
+
+    @app.post("/invite/join")
+    async def invite_join(request: Request):
+        from app.connect.accounts import AccountError, remember_person
+
+        fields = _form(await request.body())
+        token = fields.get("token", "")
+        try:
+            raw, found = app.state.accounts.join_with_invite(
+                token, name=fields.get("name", ""), password=fields.get("password", ""),
+            )
+        except AccountError as exc:
+            query = urllib.parse.urlencode({"token": token, "error": exc.code})
+            return RedirectResponse(f"/invite?{query}", status_code=303)
+        remember_person(found["tenant_id"], found["email"], found["name"])
+        response = RedirectResponse("/setup", status_code=303)
+        _cookie(response, request, raw)
+        return response
+
     @app.post("/setup/install/redeem")
     async def setup_install_redeem(request: Request):
         body = await _body(request)
@@ -478,6 +599,8 @@ def register_connect(app: FastAPI) -> None:
             return RedirectResponse("/login", status_code=303)
         if _deny(found) is not None:
             return RedirectResponse("/setup?error=verify", status_code=303)
+        if _deny(found, owner=True) is not None:
+            return RedirectResponse("/setup?error=owner", status_code=303)
         if provider not in _CONNECTABLE:
             return JSONResponse({"error": "not available"}, status_code=404)
         ready, reason = configured(provider)
@@ -495,6 +618,8 @@ def register_connect(app: FastAPI) -> None:
         found = _session(app, request)
         if found is None:
             return RedirectResponse("/login", status_code=303)
+        if _deny(found, owner=True) is not None:
+            return RedirectResponse("/setup?error=owner", status_code=303)
         if provider not in _CONNECTABLE:
             return JSONResponse({"error": "not available"}, status_code=404)
         query = dict(request.query_params)

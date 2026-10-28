@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Join a company — Weave</title>
+<link rel="icon" href="/brand/icon.png">
+<link rel="stylesheet" href="/landing/stage.css">
+<style>
+  form { display: grid; gap: 12px; max-width: 360px; margin-top: 28px; }
+  label { color: var(--dim); font-size: 14px; }
+  input {
+    height: 44px; border-radius: 6px; border: 1px solid var(--line);
+    background: #0a0a0a; color: var(--ink); padding: 0 12px; font: inherit;
+  }
+  button {
+    height: 44px; border: 0; border-radius: 6px; background: #fff; color: #000;
+    font-weight: 650; cursor: pointer;
+  }
+  button:focus-visible, a:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+  .error { color: #f5f5f5; min-height: 1.4em; }
+  .alt { color: var(--dim); }
+  .alt a { color: var(--ink); }
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/"><img src="/brand/mark.png" alt="">Weave</a>
+  <nav class="nav">
+    <a class="textlink" href="/guide">Pet guide</a>
+    <a class="textlink" href="/signup">Create a company</a>
+  </nav>
+</header>
+<main class="hero">
+  <h1 id="title">Join your team on Weave.</h1>
+  <p id="lede" class="lede"></p>
+  <p id="error" class="error" role="alert"></p>
+  <form id="accept" method="post" action="/invite/accept" hidden>
+    <input name="token" type="hidden">
+    <button type="submit">Join the company</button>
+  </form>
+  <form id="join" method="post" action="/invite/join" hidden>
+    <input name="token" type="hidden">
+    <label for="name">Your name</label>
+    <input id="name" name="name" autocomplete="name" required>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="new-password" minlength="10" required>
+    <button type="submit">Create account and join</button>
+  </form>
+  <p id="other" class="alt" hidden>Already have a Weave account with this email? <a href="/login">Sign in</a>, then open this link again.</p>
+</main>
+<script>
+const params = new URLSearchParams(location.search);
+const token = params.get("token") || "";
+const errors = {
+  signin: "Sign in first, then open this link again.",
+  email: "This invite is for a different email than the one you are signed in with. Sign out first.",
+  expired: "That invite has expired or was already used. Ask the owner for a new one.",
+  registered: "That email already has an account. Sign in, then open this link again.",
+  password: "Use at least 10 characters.",
+  name: "Enter your name.",
+};
+document.getElementById("error").textContent = errors[params.get("error")] || "";
+document.querySelectorAll("input[name=token]").forEach((input) => { input.value = token; });
+
+async function show() {
+  const info = await fetch("/invite/info?token=" + encodeURIComponent(token));
+  if (!info.ok) {
+    document.getElementById("error").textContent = errors.expired;
+    return;
+  }
+  const invite = await info.json();
+  document.getElementById("title").textContent = "Join " + invite.company + " on Weave.";
+  document.getElementById("lede").textContent = "This invite is for " + invite.email + ".";
+  const session = await fetch("/session").then((response) => response.ok ? response.json() : null);
+  if (session && session.email === invite.email) {
+    document.getElementById("accept").hidden = false;
+  } else if (session) {
+    document.getElementById("error").textContent = errors.email;
+  } else {
+    document.getElementById("join").hidden = false;
+    document.getElementById("other").hidden = false;
+  }
+}
+show();
+</script>
+</body>
+</html>

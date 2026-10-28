@@ -146,6 +146,19 @@
     <pre id="token"></pre>
     <button id="download" type="button">Download pet.config.json</button>
   </div>
+  <section id="team" hidden>
+    <h2>4. Team</h2>
+    <p class="hint">Invite people by email. Members can use Weave; only you connect tools and manage the team. Removing someone ends their access here, including their tokens.</p>
+    <form id="invite-form">
+      <label for="invite-email">Email</label>
+      <input id="invite-email" type="email" autocomplete="off" required>
+      <button type="submit">Send invite</button>
+    </form>
+    <p id="team-error" class="error"></p>
+    <ul id="members"></ul>
+    <ul id="invites"></ul>
+  </section>
+  <p id="member-note" class="hint" hidden>You are a member of this company. The owner connects tools and manages the team; you can use Weave below.</p>
   <h3>Your tokens</h3>
   <p class="hint">Each download and each Open Weave makes a token that lasts 30 days. Revoke one you no longer use, or all of them if a laptop is lost. A revoked token stops working within a minute; an expired one needs a new download.</p>
   <ul id="tokens"></ul>
@@ -270,6 +283,12 @@ async function load() {
   if (session) {
     who.textContent = session.email + " · " + session.tenant;
     document.getElementById("verify").hidden = session.verified !== false;
+    const owner = session.role === "owner";
+    document.getElementById("company").hidden = !owner;
+    document.getElementById("model").hidden = !owner;
+    document.getElementById("member-note").hidden = owner;
+    document.getElementById("team").hidden = !owner || session.verified === false;
+    if (owner && session.verified !== false) loadTeam();
     document.getElementById("verify-email").textContent = session.email;
     if ((session.memberships || []).length > 1) {
       const form = document.createElement("form");
@@ -303,9 +322,11 @@ async function load() {
   if (params.get("error")) {
     const note = document.createElement("p");
     note.className = "error";
-    note.textContent = params.get("error") === "verify"
-      ? "Confirm your email first. The link is in your inbox."
-      : "That connect did not finish. Try the button again.";
+    const notes = {
+      verify: "Confirm your email first. The link is in your inbox.",
+      owner: "Only the company owner can connect tools.",
+    };
+    note.textContent = notes[params.get("error")] || "That connect did not finish. Try the button again.";
     cards.prepend(note);
   }
 }
@@ -390,6 +411,54 @@ document.getElementById("verify-resend").addEventListener("click", async () => {
   } catch (exc) {
     state.textContent = exc.message;
   }
+});
+
+function teamRow(text, label, action) {
+  const item = document.createElement("li");
+  item.textContent = text + " ";
+  if (label) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", action);
+    item.append(button);
+  }
+  return item;
+}
+
+async function teamAction(url, body) {
+  const error = document.getElementById("team-error");
+  error.textContent = "";
+  try {
+    await post(url, body);
+  } catch (exc) {
+    error.textContent = exc.message;
+  }
+  loadTeam();
+}
+
+async function loadTeam() {
+  const response = await fetch("/setup/members");
+  if (!response.ok) return;
+  const team = await response.json();
+  const members = document.getElementById("members");
+  members.replaceChildren(...team.members.map((person) => person.role === "owner"
+    ? teamRow(person.name + " · " + person.email + " · owner")
+    : teamRow(person.name + " · " + person.email + " · member", "Remove", () => {
+        if (confirm("Remove " + person.email + "? Their Weave access to this company ends now.")) {
+          teamAction("/setup/members/remove", { user_id: person.user_id });
+        }
+      })));
+  document.getElementById("invites").replaceChildren(...team.invites.map((invite) =>
+    teamRow("Invited " + invite.email + " · expires " + day(invite.expires), "Cancel",
+      () => teamAction("/setup/invites/revoke", { id: invite.id }))));
+}
+
+document.getElementById("invite-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const input = document.getElementById("invite-email");
+  await teamAction("/setup/invites", { email: input.value });
+  input.value = "";
 });
 
 function day(value) {

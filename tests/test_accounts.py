@@ -121,9 +121,13 @@ def test_slack_team_routes_to_its_tenant(monkeypatch):
     secrets = MemorySecretStore()
     secrets.put("north", "slack", "TNORTH", {"token": "xoxb-north"}, status="connected")
     app = _app(secrets)
+    app.state.workspace_id = "TREAL"
     use_store(secrets)
     assert _slack_event_tenant(app, {"team_id": "TNORTH"}) == "north"
-    assert _slack_event_tenant(app, {"team_id": "TOTHER"}) == "real"
+    assert _slack_event_tenant(app, {"team_id": "TREAL"}) == "real"
+    # A workspace no company connected does not fall back to the env company.
+    assert _slack_event_tenant(app, {"team_id": "TOTHER"}) is None
+    assert _slack_event_tenant(app, {}) is None
     use_store(None)
 
 

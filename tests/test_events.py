@@ -24,6 +24,9 @@ def _sign(body: bytes, timestamp: str) -> str:
 
 
 def _post(client: TestClient, payload: dict, *, signature: str | None = None):
+    if payload.get("type") == "event_callback":
+        # Slack puts the workspace on every event callback.
+        payload = {"team_id": WORKSPACE, **payload}
     body = json.dumps(payload).encode()
     timestamp = str(int(time.time()))
     return client.post(
@@ -184,3 +187,41 @@ def test_redelivered_event_does_not_apply_a_newer_body(graph):
 class _Silent:
     def query(self, query, params=None):
         return type("Result", (), {"result_set": []})()
+
+
+class _Untouched:
+    def query(self, query, params=None):
+        raise AssertionError(query)
+
+
+def _message_from(team: str) -> dict:
+    return {
+        "type": "event_callback",
+        "team_id": team,
+        "event_id": f"Ev-{team}",
+        "event": {"type": "message", "channel": CHANNEL, "channel_type": "channel", "user": "U9", "text": "hi", "ts": "50.1"},
+    }
+
+
+def test_an_event_from_a_workspace_no_company_owns_is_dropped():
+    response = _post(_app(_Untouched()), _message_from("TSTRANGER"))
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_a_failed_workspace_lookup_asks_slack_to_retry():
+    from app.connect.credentials import use_store
+
+    class Broken:
+        def find_tenant(self, provider, external_id):
+            raise ConnectionError("postgres is down")
+
+    client = _app(_Untouched())
+    use_store(Broken())
+    try:
+        response = _post(client, _message_from("TSTRANGER"))
+    finally:
+        use_store(None)
+
+    assert response.status_code == 503

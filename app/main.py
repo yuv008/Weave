@@ -5,6 +5,7 @@ There is no per-user ACL on this route.
 """
 
 import json
+import logging
 import os
 import time
 
@@ -18,6 +19,7 @@ from app.github.events import apply_github_event, verify_github_signature
 from app.slack.events import apply_slack_event, verify_slack_signature
 
 _AUTO = object()
+log = logging.getLogger("weave.webhook")
 
 
 def _records(app):
@@ -65,20 +67,24 @@ def _deny_unless_viewer(app, request: Request):
     return None
 
 
-def _slack_event_tenant(app, payload: dict) -> str:
-    """The company that owns this Slack workspace. The env tenant is the fallback."""
+def _slack_event_tenant(app, payload: dict) -> str | None:
+    """The company that owns this Slack workspace, or ``None`` when no company does.
+
+    A stored grant names the company. The env tenant owns only the env workspace.
+    A failed lookup raises, so Slack retries instead of the event landing in the wrong company.
+    """
 
     team = str(payload.get("team_id") or "")
-    if team:
-        try:
-            from app.connect.credentials import current_store
+    if not team:
+        return None
+    from app.connect.credentials import current_store
 
-            found = current_store().find_tenant("slack", team)
-        except Exception:
-            found = None
-        if found and found != "acme":
-            return found
-    return app.state.tenant_id or ""
+    found = current_store().find_tenant("slack", team)
+    if found and found != "acme":
+        return found
+    if team == app.state.workspace_id and app.state.tenant_id:
+        return app.state.tenant_id
+    return None
 
 
 def _claims_for(app, payload: dict, tenant: str | None = None):
@@ -221,7 +227,17 @@ def create_app(
         if not isinstance(payload, dict):
             return JSONResponse({"error": "invalid json"}, status_code=400)
 
-        tenant = _slack_event_tenant(app, payload)
+        tenant = None
+        if payload.get("type") == "event_callback":
+            try:
+                tenant = _slack_event_tenant(app, payload)
+            except Exception as exc:
+                log.warning("slack workspace lookup failed (%s)", type(exc).__name__)
+                return JSONResponse({"error": "unavailable"}, status_code=503)
+            if tenant is None:
+                # 200 so Slack does not retry an event no company owns.
+                log.warning("slack event dropped: no company owns team %s", str(payload.get("team_id") or "-")[:32])
+                return {"ok": True}
         workspace = str(payload.get("team_id") or app.state.workspace_id or "")
 
         def ingest() -> None:

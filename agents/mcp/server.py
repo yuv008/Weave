@@ -95,6 +95,8 @@ async def _plain(send: Send, status: int, body: bytes, headers: list[tuple[bytes
 
 # A revoked or expired token stops within this many seconds.
 _CUE_CACHE_TTL = 60.0
+# Requests per token per minute. /answer and /wisp/mail call the model; /wisp/cue only searches.
+PER_TOKEN_PER_MINUTE = {"/answer": 20, "/wisp/mail": 20, "/wisp/cue": 120}
 
 
 class BearerAuth:
@@ -102,15 +104,35 @@ class BearerAuth:
 
     ``POST /wisp/cue`` reuses a principal for a short time so a draft can be
     checked more than once while someone is still typing. Other routes resolve
-    every request.
+    every request. A token over its per-minute share of a model route gets a 429.
     """
 
-    def __init__(self, app: ASGIApp, resolve: Callable[[str, Surface], Principal], mcp_path: str = "/mcp"):
+    def __init__(self, app: ASGIApp, resolve: Callable[[str, Surface], Principal], mcp_path: str = "/mcp",
+                 *, clock: Callable[[], float] = time.monotonic):
         self._app = app
         self._resolve = resolve
         self._mcp_path = mcp_path
+        self._clock = clock
         self._cue_cache: dict[str, tuple[float, Principal]] = {}
         self._cue_lock = threading.Lock()
+        # ponytail: per-process window, fine for the single edge task; move to Postgres or Redis if the edge scales out.
+        self._hits: dict[tuple[str, str], list[float]] = {}
+
+    def _over_limit(self, digest: str, path: str) -> int:
+        """Seconds to wait when this token is over its limit on ``path``, else 0. Counts the request when allowed."""
+
+        limit = PER_TOKEN_PER_MINUTE.get(path)
+        if limit is None:
+            return 0
+        now = self._clock()
+        with self._cue_lock:
+            hits = [at for at in self._hits.get((digest, path), ()) if now - at < 60.0]
+            if len(hits) >= limit:
+                self._hits[(digest, path)] = hits
+                return max(1, int(60.0 - (now - hits[0])) + 1)
+            hits.append(now)
+            self._hits[(digest, path)] = hits
+        return 0
 
     def _cue_hit(self, token: str) -> tuple[Principal | None, str]:
         digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -157,6 +179,10 @@ class BearerAuth:
         except Exception:
             log.exception("token resolution failed")
             await _plain(send, 503, b"unavailable")
+            return
+        wait = self._over_limit(cue_digest, path) if cue_digest is not None else 0
+        if wait:
+            await _plain(send, 429, b"too many requests", [(b"retry-after", str(wait).encode())])
             return
         reset = _CALLER.set(Caller(principal, uuid.uuid4().hex[:16]))
         try:

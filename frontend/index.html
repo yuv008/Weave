@@ -142,6 +142,11 @@
     <pre id="token"></pre>
     <button id="download" type="button">Download pet.config.json</button>
   </div>
+  <h3>Your tokens</h3>
+  <p class="hint">Each download and each Open Weave makes a token that lasts 30 days. Revoke one you no longer use, or all of them if a laptop is lost. A revoked token stops working within a minute; an expired one needs a new download.</p>
+  <ul id="tokens"></ul>
+  <button id="revoke-all" class="button quiet" type="button">Revoke all tokens</button>
+  <p id="tokens-error" class="error"></p>
 </main>
 <script>
 const cards = document.getElementById("cards");
@@ -320,6 +325,7 @@ document.getElementById("open").addEventListener("click", async () => {
     document.getElementById("token").textContent = opened.token;
     document.getElementById("mcp").textContent = JSON.stringify(opened.mcp, null, 2);
     document.getElementById("result").hidden = false;
+    loadTokens();
   } catch (exc) {
     error.textContent = exc.message;
   }
@@ -340,8 +346,53 @@ document.getElementById("pet-setup").addEventListener("click", async () => {
     link.href = URL.createObjectURL(blob);
     link.download = minted.filename;
     link.click();
+    loadTokens();
   } catch (exc) {
     error.textContent = exc.message;
+  }
+});
+
+function day(value) {
+  return value ? new Date(value).toLocaleDateString() : "";
+}
+
+async function loadTokens() {
+  const list = document.getElementById("tokens");
+  const response = await fetch("/setup/tokens");
+  if (!response.ok) return;
+  const payload = await response.json();
+  list.replaceChildren();
+  for (const token of payload.tokens) {
+    const live = !token.revoked && (!token.expires || new Date(token.expires) > new Date());
+    const state = token.revoked ? "revoked" : live ? "expires " + day(token.expires) : "expired";
+    const item = document.createElement("li");
+    item.textContent = (token.label === "pet" ? "Pet download" : "Open Weave") + " · made " + day(token.created) + " · " + state + " ";
+    if (live) {
+      const revoke = document.createElement("button");
+      revoke.type = "button";
+      revoke.textContent = "Revoke";
+      revoke.addEventListener("click", () => revokeTokens({ id: token.id }));
+      item.append(revoke);
+    }
+    list.append(item);
+  }
+  document.getElementById("revoke-all").hidden = !payload.tokens.some((token) => !token.revoked);
+}
+
+async function revokeTokens(body) {
+  const error = document.getElementById("tokens-error");
+  error.textContent = "";
+  try {
+    await post("/setup/tokens/revoke", body);
+  } catch (exc) {
+    error.textContent = exc.message;
+  }
+  loadTokens();
+}
+
+document.getElementById("revoke-all").addEventListener("click", () => {
+  if (confirm("Revoke every Weave token for this account? The pet and Cursor stop answering until you download again.")) {
+    revokeTokens({ all: true });
   }
 });
 
@@ -355,6 +406,7 @@ document.getElementById("download").addEventListener("click", () => {
 });
 
 load();
+loadTokens();
 </script>
 </body>
 </html>

@@ -25,6 +25,7 @@ SESSION_COOKIE = "weave_session"
 SESSION_MAX_AGE = 14 * 24 * 3600
 LANDING_FILES = {"stage.js": "text/javascript", "stage.css": "text/css"}
 _CONNECTABLE = {"slack", "notion", "google", "github"}
+TOKEN_DAYS = 30
 
 
 def register_connect(app: FastAPI) -> None:
@@ -302,7 +303,7 @@ def register_connect(app: FastAPI) -> None:
         if not email:
             return JSONResponse({"error": "the server has no viewer email"}, status_code=400)
         try:
-            token = _mint(tenant, email, app)
+            token = _mint(tenant, email, app, label="pet")
         except Exception as exc:
             log.warning("viewer token was not minted (%s)", type(exc).__name__)
             return JSONResponse({"error": "could not create a viewer token"}, status_code=500)
@@ -313,6 +314,35 @@ def register_connect(app: FastAPI) -> None:
             {"cue_url": f"{agent}/wisp/cue", "token": token, "mcp_url": f"{agent}/mcp"},
         )
         return {"code": code, "filename": f"WeavePetSetup-{code}.exe"}
+
+    @app.get("/setup/tokens")
+    def setup_tokens(request: Request):
+        found = _session(app, request)
+        if found is None:
+            return JSONResponse({"error": "sign in"}, status_code=401)
+        try:
+            return {"days": TOKEN_DAYS, "tokens": _own_tokens(app, found["tenant_id"], found["email"])}
+        except Exception as exc:
+            log.warning("tokens were not listed (%s)", type(exc).__name__)
+            return JSONResponse({"error": "could not list tokens"}, status_code=503)
+
+    @app.post("/setup/tokens/revoke")
+    async def setup_tokens_revoke(request: Request):
+        found = _session(app, request)
+        if found is None:
+            return JSONResponse({"error": "sign in"}, status_code=401)
+        body = await _body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        short = None if body.get("all") is True else str(body.get("id") or "")
+        if short is not None and re.fullmatch(r"[0-9a-f]{8}", short) is None:
+            return JSONResponse({"error": "pick a token to revoke"}, status_code=400)
+        try:
+            revoked = _revoke_tokens(app, found["tenant_id"], found["email"], short)
+        except Exception as exc:
+            log.warning("tokens were not revoked (%s)", type(exc).__name__)
+            return JSONResponse({"error": "could not revoke"}, status_code=503)
+        return {"revoked": revoked}
 
     @app.post("/setup/install/redeem")
     async def setup_install_redeem(request: Request):
@@ -554,24 +584,77 @@ async def _body(request: Request):
     return payload
 
 
-def _mint(tenant: str, email: str, app) -> str:
-    from agents.gate.resolve import hash_token
-    from shared.ids import person_id
-
-    token = f"wv_{secrets.token_urlsafe(24)}"
+def _pg(app):
     connect = app.state.pg_connect if getattr(app.state, "pg_connect", None) else None
     if connect is None:
         from shared.pg import connect_pg
 
         connect = connect_pg
-    conn = connect()
+    return connect()
+
+
+def _mint(tenant: str, email: str, app, label: str = "mcp") -> str:
+    from agents.gate.resolve import hash_token
+    from shared.ids import person_id
+
+    token = f"wv_{secrets.token_urlsafe(24)}"
+    conn = _pg(app)
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO api_token (token_sha256, tenant_id, person_id, label) VALUES (%s, %s, %s, %s)",
-                (hash_token(token), tenant, person_id(tenant, email), "setup"),
+                "INSERT INTO api_token (token_sha256, tenant_id, person_id, label, expires_at) "
+                f"VALUES (%s, %s, %s, %s, now() + interval '{TOKEN_DAYS} days')",
+                (hash_token(token), tenant, person_id(tenant, email), label),
             )
         conn.commit()
     finally:
         conn.close()
     return token
+
+
+def _own_tokens(app, tenant: str, email: str) -> list[dict]:
+    """The signed-in person's tokens. The id is a hash prefix; the hash itself never leaves."""
+
+    from shared.ids import person_id
+
+    conn = _pg(app)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT left(token_sha256, 8), label, created_at, expires_at, revoked_at
+                FROM api_token WHERE tenant_id = %s AND person_id = %s
+                ORDER BY created_at DESC LIMIT 50
+                """,
+                (tenant, person_id(tenant, email)),
+            )
+            rows = cur.fetchall()
+        conn.commit()
+    finally:
+        conn.close()
+    stamp = lambda value: value.isoformat() if value else None
+    return [
+        {"id": short, "label": label or "", "created": stamp(created), "expires": stamp(expires), "revoked": stamp(revoked)}
+        for short, label, created, expires, revoked in rows
+    ]
+
+
+def _revoke_tokens(app, tenant: str, email: str, short: str | None) -> int:
+    """Revoke one token by its id, or all of them when ``short`` is ``None``. Only the caller's own."""
+
+    from shared.ids import person_id
+
+    sql = "UPDATE api_token SET revoked_at = now() WHERE tenant_id = %s AND person_id = %s AND revoked_at IS NULL"
+    params: tuple = (tenant, person_id(tenant, email))
+    if short is not None:
+        sql += " AND left(token_sha256, 8) = %s"
+        params += (short,)
+    conn = _pg(app)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            count = cur.rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    return max(count or 0, 0)

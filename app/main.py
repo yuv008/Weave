@@ -46,7 +46,8 @@ def _viewer_tenant(token: str) -> str | None:
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT tenant_id FROM api_token WHERE token_sha256 = %s AND revoked_at IS NULL",
+                    "SELECT tenant_id FROM api_token WHERE token_sha256 = %s AND revoked_at IS NULL"
+                    " AND (expires_at IS NULL OR expires_at > now())",
                     (hash_token(token),),
                 )
                 row = cur.fetchone()

@@ -193,3 +193,109 @@ def test_one_owner_index_is_in_the_migrations():
     sql = (Path(__file__).resolve().parents[1] / "migrations" / "011_one_owner.sql").read_text(encoding="utf-8")
     assert "UNIQUE INDEX IF NOT EXISTS tenant_membership_one_owner" in sql
     assert "WHERE role = 'owner'" in sql
+
+
+class _TokenConn:
+    """api_token as the routes see it. Records each statement and its params."""
+
+    def __init__(self, rows=()):
+        self.rows, self.calls, self.rowcount = list(rows), [], 1
+
+    def cursor(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=None):
+        self.calls.append((" ".join(sql.split()), tuple(params or ())))
+
+    def fetchall(self):
+        return self.rows
+
+    def commit(self):
+        return None
+
+    def close(self):
+        return None
+
+
+def _signed_in_north(monkeypatch, conn):
+    monkeypatch.setenv("WEAVE_SECRET_KEY", "test-key")
+    app = _app()
+    app.state.pg_connect = lambda: conn
+    client = TestClient(app)
+    _signup(client)
+    return app, client
+
+
+def test_minted_tokens_expire_in_30_days_and_say_what_made_them(monkeypatch):
+    conn = _TokenConn()
+    app, client = _signed_in_north(monkeypatch, conn)
+    app.state.secrets.put("north", "slack", "TNORTH", {"token": "xoxb-north"}, status="connected")
+
+    assert client.post("/setup/open").status_code == 200
+    assert client.post("/setup/install-code").status_code == 200
+
+    inserts = [(sql, params) for sql, params in conn.calls if sql.startswith("INSERT INTO api_token")]
+    assert [params[3] for _, params in inserts] == ["mcp", "pet"]
+    assert all("now() + interval '30 days'" in sql for sql, _ in inserts)
+    use_store(None)
+
+
+def test_the_token_list_shows_only_a_short_id(monkeypatch):
+    from datetime import UTC, datetime
+
+    made = datetime(2026, 10, 28, tzinfo=UTC)
+    conn = _TokenConn(rows=[("ab12cd34", "pet", made, made, None)])
+    _, client = _signed_in_north(monkeypatch, conn)
+
+    listed = client.get("/setup/tokens").json()
+    assert listed["days"] == 30
+    assert listed["tokens"] == [{"id": "ab12cd34", "label": "pet", "created": made.isoformat(),
+                                 "expires": made.isoformat(), "revoked": None}]
+    sql, params = conn.calls[-1]
+    assert "left(token_sha256, 8)" in sql and "SELECT token_sha256" not in sql
+    assert params == ("north", "north:person:ada@north.test")
+    use_store(None)
+
+
+def test_revoke_touches_only_the_callers_own_tokens(monkeypatch):
+    conn = _TokenConn()
+    _, client = _signed_in_north(monkeypatch, conn)
+
+    assert client.post("/setup/tokens/revoke", json={"id": "ab12cd34"}).json() == {"revoked": 1}
+    sql, params = conn.calls[-1]
+    assert sql.startswith("UPDATE api_token SET revoked_at = now() WHERE tenant_id = %s AND person_id = %s")
+    assert params == ("north", "north:person:ada@north.test", "ab12cd34")
+
+    assert client.post("/setup/tokens/revoke", json={"all": True}).status_code == 200
+    assert conn.calls[-1][1] == ("north", "north:person:ada@north.test")
+
+    assert client.post("/setup/tokens/revoke", json={"id": "' OR 1=1 --"}).status_code == 400
+    assert client.post("/setup/tokens/revoke", json={}).status_code == 400
+    use_store(None)
+
+
+def test_token_routes_need_a_session():
+    client = TestClient(_app())
+    assert client.get("/setup/tokens").status_code == 401
+    assert client.post("/setup/tokens/revoke", json={"all": True}).status_code == 401
+    use_store(None)
+
+
+def test_expired_tokens_are_refused_everywhere():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    migration = (root / "migrations" / "012_token_expiry.sql").read_text(encoding="utf-8")
+    assert "ADD COLUMN IF NOT EXISTS expires_at" in migration
+    assert "created_at + interval '30 days'" in migration
+    function = migration.split("CREATE OR REPLACE FUNCTION weave_token_owner", 1)[1]
+    assert "t.revoked_at IS NULL" in function
+    assert "t.expires_at IS NULL OR t.expires_at > now()" in function
+    main = (root / "app" / "main.py").read_text(encoding="utf-8")
+    assert "expires_at IS NULL OR expires_at > now()" in main

@@ -21,7 +21,7 @@ def gmail_sync_id(tenant_id: str, mailbox: str) -> str:
 
 
 def poll_mailbox(tenant_id: str, connection_id: str, mailbox: str, client, graph, store=None) -> None:
-    found = allowed_source("gmail", mailbox)
+    found = allowed_source("gmail", mailbox, tenant_id)
     if found is None:
         return
     group, _policy = found

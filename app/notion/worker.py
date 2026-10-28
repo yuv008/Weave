@@ -27,7 +27,7 @@ def notion_failure_id(tenant_id: str, page_id: str) -> str:
 
 
 def poll_shared_pages(tenant_id: str, connection_id: str, workspace_id: str, client, graph, store=None) -> None:
-    found = allowed_source("notion", workspace_id)
+    found = allowed_source("notion", workspace_id, tenant_id)
     if found is None:
         return
     group, _policy = found

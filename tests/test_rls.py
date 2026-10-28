@@ -25,8 +25,22 @@ ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "migrations" / "007_rls.sql"
 
 
+#: Tables only the owner connection reads. They have no tenant policy, so weave_app must not hold them.
+OWNER_ONLY = {"connection_secret", "app_user", "tenant_membership", "app_session", "login_attempt", "connected_source"}
+
+
 def _migration() -> str:
     return MIGRATION.read_text(encoding="utf-8")
+
+
+def test_owner_only_tables_end_up_without_a_weave_app_grant():
+    statements = []
+    for path in sorted((ROOT / "migrations").glob("*.sql")):
+        text = path.read_text(encoding="utf-8")
+        statements += re.findall(r"\b(GRANT|REVOKE)\b[^;]*?\bON\s+(?:TABLE\s+)?(\w+)\s+(?:TO|FROM)\s+weave_app", text)
+    for name in OWNER_ONLY:
+        last = [verb for verb, table in statements if table == name][-1:]
+        assert last != ["GRANT"], name
 
 
 class RecCursor:
@@ -102,7 +116,7 @@ def test_policies_are_fail_closed_and_turns_do_not_subquery():
     tables = re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", "\n".join(earlier))
     assert tables
     for name in tables:
-        assert f"'{name}'" in sql or name == "playbooks"
+        assert f"'{name}'" in sql or name == "playbooks" or name in OWNER_ONLY
 
     policy = sql.split("$policy$", 2)[1]
     assert policy == (

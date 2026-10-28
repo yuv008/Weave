@@ -1,7 +1,8 @@
 """Source allow-list from ``config/weave.yaml``.
 
 A container that is not listed is not written. A connector grant can add
-one through ``ensure_connected_source``; that row is the only default.
+one through ``ensure_connected_source``; that row is the only default, and
+it allows the source for the company that connected it only.
 """
 
 from shared.acl import acl_group
@@ -9,16 +10,18 @@ from shared.config import SourcePolicy, load_config
 from shared.ids import source_id
 from shared.schema import Label
 
-_connected: dict[str, SourcePolicy] | None = None
+_connected: dict[tuple[str, str], SourcePolicy] = {}
 
 
-def allowed_source(system: str, container: str) -> tuple[str, SourcePolicy] | None:
+def allowed_source(system: str, container: str, tenant_id: str | None = None) -> tuple[str, SourcePolicy] | None:
+    """Config sources hold for every company. A connected row holds only for ``tenant_id``."""
+
     if not container:
         return None
     group = acl_group(system, container)
     policy = load_config().sources.get(group)
-    if policy is None:
-        policy = _connected_policy(group)
+    if policy is None and tenant_id:
+        policy = _connected_policy(tenant_id, group)
     if policy is None:
         return None
     return group, policy
@@ -30,7 +33,7 @@ def ensure_connected_source(tenant_id: str, system: str, container: str) -> None
     if not tenant_id or not container:
         return
     group = acl_group(system, container)
-    if load_config().sources.get(group) is not None or _connected_policy(group) is not None:
+    if load_config().sources.get(group) is not None or _connected_policy(tenant_id, group) is not None:
         return
     authority = load_config().authority.get(system)
     if authority is None:
@@ -44,22 +47,15 @@ def ensure_connected_source(tenant_id: str, system: str, container: str) -> None
     )
     if not _store_connected(tenant_id, group, policy):
         return
-    _remember(group, policy)
+    _connected[(tenant_id, group)] = policy
 
 
-def _connected_policy(group: str) -> SourcePolicy | None:
-    return _load_connected().get(group)
+def _connected_policy(tenant_id: str, group: str) -> SourcePolicy | None:
+    """This company's row for ``group``. A miss reads Postgres, so a row another process wrote is seen."""
 
-
-def _remember(group: str, policy: SourcePolicy) -> None:
-    _load_connected()[group] = policy
-
-
-def _load_connected() -> dict[str, SourcePolicy]:
-    global _connected
-    if _connected is not None:
-        return _connected
-    _connected = {}
+    key = (tenant_id, group)
+    if key in _connected:
+        return _connected[key]
     try:
         from shared.pg import connect_pg
 
@@ -67,22 +63,28 @@ def _load_connected() -> dict[str, SourcePolicy]:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT acl_group, name, min_level, cascade_policy, authority, org_wide
+                    SELECT name, min_level, cascade_policy, authority, org_wide
                     FROM connected_source
-                    """
+                    WHERE tenant_id = %s AND acl_group = %s
+                    """,
+                    key,
                 )
-                for group, name, min_level, cascade, authority, org_wide in cur.fetchall():
-                    _connected[group] = SourcePolicy(
-                        name=name,
-                        min_level=int(min_level),
-                        cascade_policy=cascade,
-                        authority=int(authority),
-                        org_wide=bool(org_wide),
-                    )
+                row = cur.fetchone()
             conn.commit()
     except Exception:
-        return _connected
-    return _connected
+        return None
+    if row is None:
+        return None
+    name, min_level, cascade, authority, org_wide = row
+    policy = SourcePolicy(
+        name=name,
+        min_level=int(min_level),
+        cascade_policy=cascade,
+        authority=int(authority),
+        org_wide=bool(org_wide),
+    )
+    _connected[key] = policy
+    return policy
 
 
 def _store_connected(tenant_id: str, group: str, policy: SourcePolicy) -> bool:

@@ -28,7 +28,7 @@ def drive_failure_id(tenant_id: str, file_id: str) -> str:
 
 
 def poll_folder(tenant_id: str, connection_id: str, folder_id: str, client, graph, store=None) -> None:
-    found = allowed_source("gdrive", folder_id)
+    found = allowed_source("gdrive", folder_id, tenant_id)
     if found is None:
         return
     group, _policy = found

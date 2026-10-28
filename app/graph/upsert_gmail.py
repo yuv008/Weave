@@ -86,7 +86,7 @@ MERGE (parent)-[:{Rel.IN_SOURCE}]->(:{Label.SOURCE} {{id: $source_id}})
 
 
 def upsert_gmail_message(graph, message: CanonicalGmailMessage, *, now: datetime | None = None) -> UpsertResult:
-    allowed = allowed_source("gmail", message.mailbox)
+    allowed = allowed_source("gmail", message.mailbox, message.tenant_id)
     if allowed is None:
         return UpsertResult(node_id=message.node_id, applied=False)
     group, policy = allowed

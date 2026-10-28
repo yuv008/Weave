@@ -30,7 +30,7 @@ def poll_portal(
     *,
     owner_emails: dict[str, str] | None = None,
 ) -> None:
-    found = allowed_source("hubspot", portal_id)
+    found = allowed_source("hubspot", portal_id, tenant_id)
     if found is None:
         return
     group, _policy = found

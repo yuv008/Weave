@@ -21,7 +21,7 @@ def gcal_sync_id(tenant_id: str, calendar_id: str) -> str:
 
 
 def poll_calendar(tenant_id: str, connection_id: str, calendar_id: str, client, graph, store=None) -> None:
-    found = allowed_source("gcal", calendar_id)
+    found = allowed_source("gcal", calendar_id, tenant_id)
     if found is None:
         return
     group, _policy = found

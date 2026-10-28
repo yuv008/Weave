@@ -179,30 +179,30 @@ def _author_email(document: CanonicalDocument) -> str:
 
 def _allowed(document: CanonicalDocument):
     if document.source == "github":
-        found = allowed_source("github", document.repo_slug)
+        found = allowed_source("github", document.repo_slug, document.tenant_id)
         if found is None:
             return None
         group, policy = found
         return "github", group, policy, github_source_id(document.tenant_id, document.repo_slug)
     if document.source == "notion":
-        found = allowed_source("notion", document.workspace_id)
+        found = allowed_source("notion", document.workspace_id, document.tenant_id)
         if found is None:
             return None
         group, policy = found
         return "notion", group, policy, notion_source_id(document.tenant_id, document.workspace_id)
     if document.source == "gcal":
-        found = allowed_source("gcal", document.workspace_id)
+        found = allowed_source("gcal", document.workspace_id, document.tenant_id)
         if found is None:
             return None
         group, policy = found
         return "gcal", group, policy, gcal_source_id(document.tenant_id, document.workspace_id)
     if document.source == "hubspot":
-        found = allowed_source("hubspot", document.workspace_id)
+        found = allowed_source("hubspot", document.workspace_id, document.tenant_id)
         if found is None:
             return None
         group, policy = found
         return "hubspot", group, policy, hubspot_source_id(document.tenant_id, document.workspace_id)
-    found = allowed_source("gdrive", document.workspace_id)
+    found = allowed_source("gdrive", document.workspace_id, document.tenant_id)
     if found is None:
         return None
     group, policy = found

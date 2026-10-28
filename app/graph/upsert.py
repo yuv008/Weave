@@ -145,7 +145,7 @@ def upsert_message(
 ) -> UpsertResult:
     """Upsert one message. An unknown channel is not written."""
 
-    allowed = allowed_source("slack", message.conversation_external_id)
+    allowed = allowed_source("slack", message.conversation_external_id, message.tenant_id)
     if allowed is None:
         return UpsertResult(node_id=message.node_id, applied=False)
     group, policy = allowed

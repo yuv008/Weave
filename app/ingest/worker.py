@@ -174,7 +174,7 @@ def _sync_channel(
     incremental: bool,
     store,
 ) -> None:
-    found = allowed_source("slack", channel_id)
+    found = allowed_source("slack", channel_id, tenant_id)
     if found is None:
         return
     group, _policy = found

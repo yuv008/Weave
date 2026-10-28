@@ -12,7 +12,7 @@ from shared.timefmt import to_ts
 
 
 def upsert_hubspot_company(graph, company: HubspotCompany) -> UpsertResult:
-    allowed = allowed_source("hubspot", company.portal_id)
+    allowed = allowed_source("hubspot", company.portal_id, company.tenant_id)
     if allowed is None:
         return UpsertResult(node_id=company.customer_id, applied=False)
     group, policy = allowed
@@ -54,7 +54,7 @@ MERGE (p)-[:{Rel.OWNS}]->(cust)
 
 
 def upsert_hubspot_deal(graph, deal: HubspotDeal) -> UpsertResult:
-    allowed = allowed_source("hubspot", deal.portal_id)
+    allowed = allowed_source("hubspot", deal.portal_id, deal.tenant_id)
     if allowed is None:
         return UpsertResult(node_id=deal.deal_entity_id, applied=False)
     group, policy = allowed

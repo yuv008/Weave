@@ -40,7 +40,7 @@ def github_failure_id(tenant_id: str, repo_id: str, external_id: str) -> str:
 
 
 def poll_repository(tenant_id: str, connection_id: str, owner: str, repo: str, client, graph, store=None) -> None:
-    found = allowed_source("github", f"{owner}/{repo}")
+    found = allowed_source("github", f"{owner}/{repo}", tenant_id)
     if found is None:
         return
     group, _policy = found

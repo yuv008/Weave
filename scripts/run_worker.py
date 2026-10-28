@@ -251,7 +251,7 @@ def _drive_once(tenant: str | None = None) -> bool:
     from app.graph.policy import allowed_source, ensure_connected_source
 
     ensure_connected_source(chosen, "gdrive", folder)
-    if allowed_source("gdrive", folder) is None:
+    if allowed_source("gdrive", folder, chosen) is None:
         return False
     graph = connect_graph(tenant=chosen)
     poll_folder(

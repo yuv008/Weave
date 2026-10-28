@@ -94,6 +94,8 @@
   <h1>Set up Weave</h1>
   <p><a href="/guide">Pet walkthrough</a> — one-click install and what the pet does.</p>
   <p id="who"></p>
+  <form method="post" action="/logout"><button class="button quiet" type="submit">Sign out</button></form>
+  <p id="verify" class="hint" hidden>Confirm your email to connect tools and get Weave. We sent a link to <span id="verify-email"></span>. <button id="verify-resend" class="button quiet" type="button">Send it again</button> <span id="verify-state"></span></p>
   <p>Connect the tools your company already uses. One connection is enough to start. Weave does not show excerpts on this page.</p>
 
   <h2>1. Company</h2>
@@ -267,6 +269,8 @@ async function load() {
   } : null;
   if (session) {
     who.textContent = session.email + " · " + session.tenant;
+    document.getElementById("verify").hidden = session.verified !== false;
+    document.getElementById("verify-email").textContent = session.email;
     if ((session.memberships || []).length > 1) {
       const form = document.createElement("form");
       const select = document.createElement("select");
@@ -299,7 +303,9 @@ async function load() {
   if (params.get("error")) {
     const note = document.createElement("p");
     note.className = "error";
-    note.textContent = "That connect did not finish. Try the button again.";
+    note.textContent = params.get("error") === "verify"
+      ? "Confirm your email first. The link is in your inbox."
+      : "That connect did not finish. Try the button again.";
     cards.prepend(note);
   }
 }
@@ -374,6 +380,16 @@ function showModel(status) {
 
 document.getElementById("model-remove").addEventListener("click", async () => {
   showModel(await post("/setup/model", { remove: true }));
+});
+
+document.getElementById("verify-resend").addEventListener("click", async () => {
+  const state = document.getElementById("verify-state");
+  try {
+    const sent = await post("/verify/resend", {});
+    state.textContent = sent.verified ? "Already confirmed." : "Sent. Check your inbox.";
+  } catch (exc) {
+    state.textContent = exc.message;
+  }
 });
 
 function day(value) {

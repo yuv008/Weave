@@ -26,7 +26,7 @@ MIGRATION = ROOT / "migrations" / "007_rls.sql"
 
 
 #: Tables only the owner connection reads. They have no tenant policy, so weave_app must not hold them.
-OWNER_ONLY = {"connection_secret", "app_user", "tenant_membership", "app_session", "login_attempt", "connected_source", "model_usage"}
+OWNER_ONLY = {"connection_secret", "app_user", "tenant_membership", "app_session", "login_attempt", "connected_source", "model_usage", "email_token", "invite"}
 
 
 def _migration() -> str:

@@ -42,11 +42,13 @@
     <input id="password" name="password" type="password" autocomplete="current-password" required>
     <button type="submit">Sign in</button>
   </form>
+  <p class="alt"><a href="/forgot">Forgot password?</a></p>
   <p class="alt">New company? <a href="/signup">Create one</a></p>
 </main>
 <script>
 const code = new URLSearchParams(location.search).get("error");
 if (code) document.getElementById("error").textContent = "That email or password is wrong.";
+if (new URLSearchParams(location.search).get("reset")) document.getElementById("error").textContent = "Password changed. Sign in with the new one.";
 </script>
 </body>
 </html>

@@ -18,6 +18,8 @@ SKIP_GRAPH = False
 SESSION_DAYS = 14
 MAX_FAILURES = 8
 WINDOW = timedelta(minutes=15)
+VERIFY_FOR = timedelta(hours=24)
+RESET_FOR = timedelta(minutes=30)
 _RESERVED = {"acme", "real"}
 
 
@@ -125,7 +127,11 @@ def remember_owner(tenant: str, email: str, name: str) -> None:
 
 
 class MemoryAccountStore:
-    def __init__(self):
+    def __init__(self, *, auto_verify: bool = True):
+        # Tests and local runs treat a new address as verified; the Postgres store does not.
+        self.auto_verify = auto_verify
+        self.verified: set[str] = set()
+        self.email_tokens: dict[str, dict] = {}
         self.users: dict[str, dict] = {}
         self.by_email: dict[str, str] = {}
         self.memberships: dict[str, list[tuple[str, str]]] = {}
@@ -153,6 +159,8 @@ class MemoryAccountStore:
         self.by_email[cleaned] = user_id
         self.memberships[user_id] = [(tenant, "owner")]
         self.tenants.add(tenant)
+        if self.auto_verify:
+            self.verified.add(user_id)
         return self._open(user_id)
 
     def login(self, email: str, password: str) -> tuple[str, dict] | None:
@@ -187,6 +195,53 @@ class MemoryAccountStore:
         row["tenant_id"] = tenant
         return self._public(row["user_id"], tenant)
 
+    def logout(self, token: str) -> None:
+        self.sessions.pop(hash_session(token), None)
+
+    def start_reset(self, email: str) -> str | None:
+        try:
+            user_id = self.by_email.get(clean_email(email))
+        except AccountError:
+            return None
+        return self._mail_token(user_id, "reset", RESET_FOR) if user_id else None
+
+    def finish_reset(self, raw: str, password: str) -> bool:
+        secret = check_password(password)
+        user_id = self._use_token(raw, "reset")
+        if user_id is None:
+            return False
+        user = self.users[user_id]
+        user["password_hash"] = hash_password(secret)
+        # The link came by email, so the address is proven too.
+        self.verified.add(user_id)
+        self.sessions = {key: row for key, row in self.sessions.items() if row["user_id"] != user_id}
+        self.attempts.pop(user["email"], None)
+        return True
+
+    def start_verify(self, user_id: str) -> str:
+        return self._mail_token(user_id, "verify", VERIFY_FOR)
+
+    def verify(self, raw: str) -> bool:
+        user_id = self._use_token(raw, "verify")
+        if user_id is None:
+            return False
+        self.verified.add(user_id)
+        return True
+
+    def _mail_token(self, user_id: str, purpose: str, life: timedelta) -> str:
+        raw = secrets.token_urlsafe(32)
+        self.email_tokens[hash_session(raw)] = {
+            "user_id": user_id, "purpose": purpose, "expires_at": datetime.now(UTC) + life, "used": False,
+        }
+        return raw
+
+    def _use_token(self, raw: str, purpose: str) -> str | None:
+        row = self.email_tokens.get(hash_session(raw or ""))
+        if row is None or row["purpose"] != purpose or row["used"] or row["expires_at"] <= datetime.now(UTC):
+            return None
+        row["used"] = True
+        return row["user_id"]
+
     def _open(self, user_id: str) -> tuple[str, dict]:
         raw = secrets.token_urlsafe(32)
         memberships = self.memberships[user_id]
@@ -204,6 +259,8 @@ class MemoryAccountStore:
             "email": user["email"],
             "name": user["name"],
             "tenant_id": tenant,
+            "verified": user_id in self.verified,
+            "role": dict(self.memberships.get(user_id, [])).get(tenant, ""),
             "memberships": [
                 {"tenant": item[0], "role": item[1]} for item in self.memberships.get(user_id, [])
             ],
@@ -275,7 +332,7 @@ class PostgresAccountStore:
             raise AccountError("registered" if "email" in constraint or tenant == "real" else "taken") from exc
         finally:
             conn.close()
-        return raw, _row(user_id, cleaned, display, tenant, [{"tenant": tenant, "role": "owner"}])
+        return raw, _row(user_id, cleaned, display, tenant, [{"tenant": tenant, "role": "owner"}], verified=False)
 
     def login(self, email: str, password: str) -> tuple[str, dict] | None:
         try:
@@ -288,7 +345,10 @@ class PostgresAccountStore:
                 if _postgres_blocked(cur, cleaned):
                     conn.commit()
                     return None
-                cur.execute("SELECT id, name, password_hash FROM app_user WHERE email = %s", (cleaned,))
+                cur.execute(
+                    "SELECT id, name, password_hash, email_verified_at IS NOT NULL FROM app_user WHERE email = %s",
+                    (cleaned,),
+                )
                 found = cur.fetchone()
                 if found is None or not verify_password(password, found[2]):
                     _postgres_fail(cur, cleaned)
@@ -311,7 +371,7 @@ class PostgresAccountStore:
             conn.commit()
         finally:
             conn.close()
-        return raw, _row(found[0], cleaned, found[1], memberships[0]["tenant"], memberships)
+        return raw, _row(found[0], cleaned, found[1], memberships[0]["tenant"], memberships, verified=found[3])
 
     def read_session(self, token: str) -> dict | None:
         conn = _connect()
@@ -319,7 +379,7 @@ class PostgresAccountStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT s.user_id, s.tenant_id, u.email, u.name
+                    SELECT s.user_id, s.tenant_id, u.email, u.name, u.email_verified_at IS NOT NULL
                     FROM app_session AS s
                     JOIN app_user AS u ON u.id = s.user_id
                     WHERE s.token_sha256 = %s AND s.expires_at > now()
@@ -337,7 +397,7 @@ class PostgresAccountStore:
             conn.commit()
         finally:
             conn.close()
-        return _row(found[0], found[2], found[3], found[1], memberships)
+        return _row(found[0], found[2], found[3], found[1], memberships, verified=found[4])
 
     def switch(self, token: str, tenant: str) -> dict | None:
         current = self.read_session(token)
@@ -354,17 +414,125 @@ class PostgresAccountStore:
         finally:
             conn.close()
         current["tenant_id"] = tenant
+        current["role"] = _role(current["memberships"], tenant)
         return current
 
+    def logout(self, token: str) -> None:
+        _write("DELETE FROM app_session WHERE token_sha256 = %s", (hash_session(token),))
 
-def _row(user_id: str, email: str, name: str, tenant: str, memberships: list[dict]) -> dict:
+    def start_reset(self, email: str) -> str | None:
+        try:
+            cleaned = clean_email(email)
+        except AccountError:
+            return None
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM app_user WHERE email = %s", (cleaned,))
+                found = cur.fetchone()
+                raw = _insert_mail_token(cur, found[0], "reset", RESET_FOR) if found else None
+            conn.commit()
+        finally:
+            conn.close()
+        return raw
+
+    def finish_reset(self, raw: str, password: str) -> bool:
+        secret = check_password(password)
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                user_id = _use_mail_token(cur, raw, "reset")
+                if user_id is None:
+                    conn.rollback()
+                    return False
+                # The link came by email, so the address is proven too.
+                cur.execute(
+                    "UPDATE app_user SET password_hash = %s, email_verified_at = coalesce(email_verified_at, now())"
+                    " WHERE id = %s RETURNING email",
+                    (hash_password(secret), user_id),
+                )
+                email = cur.fetchone()[0]
+                cur.execute("DELETE FROM app_session WHERE user_id = %s", (user_id,))
+                cur.execute("DELETE FROM login_attempt WHERE email = %s", (email,))
+            conn.commit()
+        finally:
+            conn.close()
+        return True
+
+    def start_verify(self, user_id: str) -> str:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                raw = _insert_mail_token(cur, user_id, "verify", VERIFY_FOR)
+            conn.commit()
+        finally:
+            conn.close()
+        return raw
+
+    def verify(self, raw: str) -> bool:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                user_id = _use_mail_token(cur, raw, "verify")
+                if user_id is not None:
+                    cur.execute(
+                        "UPDATE app_user SET email_verified_at = coalesce(email_verified_at, now()) WHERE id = %s",
+                        (user_id,),
+                    )
+            conn.commit()
+        finally:
+            conn.close()
+        return user_id is not None
+
+
+def _row(user_id: str, email: str, name: str, tenant: str, memberships: list[dict], *, verified: bool) -> dict:
     return {
         "user_id": user_id,
         "email": email,
         "name": name,
         "tenant_id": tenant,
+        "verified": bool(verified),
+        "role": _role(memberships, tenant),
         "memberships": memberships,
     }
+
+
+def _role(memberships: list[dict], tenant: str) -> str:
+    return next((item["role"] for item in memberships if item["tenant"] == tenant), "")
+
+
+def _write(sql: str, params: tuple) -> None:
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _insert_mail_token(cur, user_id: str, purpose: str, life: timedelta) -> str:
+    raw = secrets.token_urlsafe(32)
+    cur.execute(
+        "INSERT INTO email_token (token_sha256, user_id, purpose, expires_at) VALUES (%s, %s, %s, %s)",
+        (hash_session(raw), user_id, purpose, datetime.now(UTC) + life),
+    )
+    return raw
+
+
+def _use_mail_token(cur, raw: str, purpose: str) -> str | None:
+    """Mark a live, unused link used and return its account. Single use: a second call finds nothing."""
+
+    cur.execute(
+        """
+        UPDATE email_token SET used_at = now()
+        WHERE token_sha256 = %s AND purpose = %s AND used_at IS NULL AND expires_at > now()
+        RETURNING user_id
+        """,
+        (hash_session(raw or ""), purpose),
+    )
+    found = cur.fetchone()
+    return found[0] if found else None
 
 
 def _connect():

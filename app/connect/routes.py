@@ -14,6 +14,7 @@ from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 from app.connect.oauth import CARDS, MemoryStateStore, StateMismatch, begin, complete, configured
+from app.connect.mailer import send_quietly
 from app.connect.setup_code import SetupCodes
 
 log = logging.getLogger("weave.connect")
@@ -21,6 +22,8 @@ PAGE = Path(__file__).resolve().parents[2] / "frontend" / "index.html"
 LANDING = PAGE.with_name("landing.html")
 LOGIN = PAGE.with_name("login.html")
 SIGNUP = PAGE.with_name("signup.html")
+FORGOT = PAGE.with_name("forgot.html")
+RESET = PAGE.with_name("reset.html")
 INSTALLER = PAGE.parent / "downloads" / "WeavePetSetup.exe"
 BRAND = {"mark.png", "icon.png", "wisp.svg"}
 SESSION_COOKIE = "weave_session"
@@ -76,7 +79,7 @@ def register_connect(app: FastAPI) -> None:
         return FileResponse(SIGNUP)
 
     @app.post("/signup")
-    async def signup_submit(request: Request):
+    async def signup_submit(request: Request, background: BackgroundTasks):
         from app.connect.accounts import AccountError, remember_owner
 
         fields = _form(await request.body())
@@ -97,6 +100,8 @@ def register_connect(app: FastAPI) -> None:
         except Exception as exc:
             log.warning("company profile was not saved (%s)", type(exc).__name__)
         remember_owner(found["tenant_id"], found["email"], found["name"])
+        if found.get("verified") is False:
+            _send_verify(app, request, background, found)
         response = RedirectResponse("/setup", status_code=303)
         _cookie(response, request, raw)
         return response
@@ -110,8 +115,94 @@ def register_connect(app: FastAPI) -> None:
             "email": found["email"],
             "name": found["name"],
             "tenant": found["tenant_id"],
+            "verified": found.get("verified") is not False,
+            "role": found.get("role") or "",
             "memberships": found["memberships"],
         }
+
+    @app.post("/logout")
+    def logout(request: Request):
+        raw = request.cookies.get(SESSION_COOKIE, "")
+        if raw:
+            try:
+                app.state.accounts.logout(raw)
+            except Exception as exc:
+                log.warning("session was not ended (%s)", type(exc).__name__)
+        response = RedirectResponse("/login", status_code=303)
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return response
+
+    @app.get("/forgot")
+    def forgot_page():
+        if not FORGOT.is_file():
+            return JSONResponse({"error": "page is missing"}, status_code=404)
+        return FileResponse(FORGOT)
+
+    @app.post("/forgot")
+    async def forgot_submit(request: Request, background: BackgroundTasks):
+        email = _form(await request.body()).get("email", "")
+        try:
+            raw = app.state.accounts.start_reset(email)
+        except Exception as exc:
+            log.warning("reset link was not made (%s)", type(exc).__name__)
+            raw = None
+        if raw:
+            link = _link(request, "/reset", raw)
+            background.add_task(
+                send_quietly, app.state.mailer, email.strip().lower(), "Reset your Weave password",
+                "Someone asked to reset the password for this Weave account.\n\n"
+                f"Choose a new password here:\n{link}\n\n"
+                "The link works once, for 30 minutes. If you did not ask, ignore this email; "
+                "your password stays the same.\n",
+            )
+        # The same answer whether or not the address has an account.
+        return RedirectResponse("/forgot?sent=1", status_code=303)
+
+    @app.get("/reset")
+    def reset_page():
+        if not RESET.is_file():
+            return JSONResponse({"error": "page is missing"}, status_code=404)
+        return FileResponse(RESET)
+
+    @app.post("/reset")
+    async def reset_submit(request: Request):
+        from app.connect.accounts import AccountError
+
+        fields = _form(await request.body())
+        token = fields.get("token", "")
+        try:
+            done = app.state.accounts.finish_reset(token, fields.get("password", ""))
+        except AccountError:
+            query = urllib.parse.urlencode({"token": token, "error": "password"})
+            return RedirectResponse(f"/reset?{query}", status_code=303)
+        if not done:
+            return RedirectResponse("/reset?error=expired", status_code=303)
+        response = RedirectResponse("/login?reset=1", status_code=303)
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return response
+
+    @app.get("/verify")
+    def verify_email(token: str = ""):
+        try:
+            done = app.state.accounts.verify(token)
+        except Exception as exc:
+            log.warning("address was not verified (%s)", type(exc).__name__)
+            done = False
+        return RedirectResponse("/setup?verified=1" if done else "/setup?verified=expired", status_code=303)
+
+    @app.post("/verify/resend")
+    def verify_resend(request: Request, background: BackgroundTasks):
+        found = _session(app, request)
+        if found is None:
+            return JSONResponse({"error": "sign in"}, status_code=401)
+        if found.get("verified") is not False:
+            return {"verified": True}
+        try:
+            _send_verify(app, request, background, found)
+        except Exception as exc:
+            log.warning("verify link was not made (%s)", type(exc).__name__)
+            return JSONResponse({"error": "could not send the email"}, status_code=503)
+        return {"sent": True}
 
     @app.post("/session/tenant")
     async def session_tenant(request: Request):
@@ -209,8 +300,9 @@ def register_connect(app: FastAPI) -> None:
     @app.post("/setup/model")
     async def setup_model(request: Request):
         found = _session(app, request)
-        if found is None:
-            return JSONResponse({"error": "sign in"}, status_code=401)
+        denied = _deny(found)
+        if denied is not None:
+            return denied
         body = await _body(request)
         if isinstance(body, JSONResponse):
             return body
@@ -245,8 +337,9 @@ def register_connect(app: FastAPI) -> None:
     @app.post("/setup/google/folder")
     async def setup_folder(request: Request, background: BackgroundTasks):
         found = _session(app, request)
-        if found is None:
-            return JSONResponse({"error": "sign in"}, status_code=401)
+        denied = _deny(found)
+        if denied is not None:
+            return denied
         body = await _body(request)
         if isinstance(body, JSONResponse):
             return body
@@ -261,8 +354,9 @@ def register_connect(app: FastAPI) -> None:
     @app.post("/setup/github/repo")
     async def setup_repo(request: Request, background: BackgroundTasks):
         found = _session(app, request)
-        if found is None:
-            return JSONResponse({"error": "sign in"}, status_code=401)
+        denied = _deny(found)
+        if denied is not None:
+            return denied
         body = await _body(request)
         if isinstance(body, JSONResponse):
             return body
@@ -278,8 +372,9 @@ def register_connect(app: FastAPI) -> None:
     @app.post("/setup/open")
     async def setup_open(request: Request):
         found = _session(app, request)
-        if found is None:
-            return JSONResponse({"error": "sign in"}, status_code=401)
+        denied = _deny(found)
+        if denied is not None:
+            return denied
         tenant = found["tenant_id"]
         status = _status(app, tenant)
         ready = [card for card in status["connectors"] if card["id"] in _CONNECTABLE and card["status"] in {"connected", "syncing"}]
@@ -310,8 +405,9 @@ def register_connect(app: FastAPI) -> None:
     @app.post("/setup/install-code")
     async def setup_install_code(request: Request):
         found = _session(app, request)
-        if found is None:
-            return JSONResponse({"error": "sign in"}, status_code=401)
+        denied = _deny(found)
+        if denied is not None:
+            return denied
         tenant = found["tenant_id"]
         status = _status(app, tenant)
         ready = [card for card in status["connectors"] if card["id"] in _CONNECTABLE and card["status"] in {"connected", "syncing"}]
@@ -380,6 +476,8 @@ def register_connect(app: FastAPI) -> None:
         found = _session(app, request)
         if found is None:
             return RedirectResponse("/login", status_code=303)
+        if _deny(found) is not None:
+            return RedirectResponse("/setup?error=verify", status_code=303)
         if provider not in _CONNECTABLE:
             return JSONResponse({"error": "not available"}, status_code=404)
         ready, reason = configured(provider)
@@ -563,6 +661,34 @@ def _tenant(app, request: Request | None = None) -> str:
         if found and found.get("tenant_id"):
             return found["tenant_id"]
     return (app.state.tenant_id or os.environ.get("WEAVE_TENANT_ID") or os.environ.get("WEAVE_TENANT") or "real").strip()
+
+
+def _deny(found: dict | None, *, owner: bool = False) -> JSONResponse | None:
+    """401 without a session, 403 before the address is verified or, with ``owner``, for a member."""
+
+    if found is None:
+        return JSONResponse({"error": "sign in"}, status_code=401)
+    if found.get("verified") is False:
+        return JSONResponse({"error": "confirm your email first", "needs": "verify"}, status_code=403)
+    if owner and found.get("role") != "owner":
+        return JSONResponse({"error": "only the company owner can do this"}, status_code=403)
+    return None
+
+
+def _link(request: Request, path: str, token: str) -> str:
+    base = os.environ.get("WEAVE_PUBLIC_URL", str(request.base_url)).rstrip("/")
+    return f"{base}{path}?" + urllib.parse.urlencode({"token": token})
+
+
+def _send_verify(app, request: Request, background: BackgroundTasks, found: dict) -> None:
+    raw = app.state.accounts.start_verify(found["user_id"])
+    link = _link(request, "/verify", raw)
+    background.add_task(
+        send_quietly, app.state.mailer, found["email"], "Confirm your email for Weave",
+        f"Hi {found['name']},\n\n"
+        f"Confirm this address to finish setting up Weave:\n{link}\n\n"
+        "The link works for 24 hours. If you did not sign up for Weave, ignore this email.\n",
+    )
 
 
 def _session(app, request: Request) -> dict | None:

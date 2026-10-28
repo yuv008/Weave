@@ -161,6 +161,7 @@ def create_app(
     viewer_auth=None,
     secrets=None,
     accounts=None,
+    mailer=None,
 ) -> FastAPI:
     app = FastAPI()
     app.state.graph = graph
@@ -207,6 +208,16 @@ def create_app(
         from app.connect.accounts import MemoryAccountStore
 
         app.state.accounts = MemoryAccountStore()
+    if mailer is not None:
+        app.state.mailer = mailer
+    elif app.state.live_db:
+        from app.connect.mailer import mailer_from_env
+
+        app.state.mailer = mailer_from_env()
+    else:
+        from app.connect.mailer import MemoryMailer
+
+        app.state.mailer = MemoryMailer()
     from app.connect.credentials import use_store
     from app.connect.routes import register_connect
 

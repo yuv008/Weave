@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>New password — Weave</title>
+<link rel="icon" href="/brand/icon.png">
+<link rel="stylesheet" href="/landing/stage.css">
+<style>
+  form { display: grid; gap: 12px; max-width: 360px; margin-top: 28px; }
+  label { color: var(--dim); font-size: 14px; }
+  input {
+    height: 44px; border-radius: 6px; border: 1px solid var(--line);
+    background: #0a0a0a; color: var(--ink); padding: 0 12px; font: inherit;
+  }
+  button {
+    height: 44px; border: 0; border-radius: 6px; background: #fff; color: #000;
+    font-weight: 650; cursor: pointer;
+  }
+  button:focus-visible, a:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+  .error { color: #f5f5f5; min-height: 1.4em; }
+  .alt { color: var(--dim); }
+  .alt a { color: var(--ink); }
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/"><img src="/brand/mark.png" alt="">Weave</a>
+  <nav class="nav">
+    <a class="textlink" href="/guide">Pet guide</a>
+    <a class="textlink" href="/signup">Create a company</a>
+  </nav>
+</header>
+<main class="hero">
+  <h1>Choose a new password.</h1>
+  <p class="lede">At least 10 characters. Signing in again is needed on every device.</p>
+  <p id="error" class="error" role="alert"></p>
+  <form method="post" action="/reset">
+    <input id="token" name="token" type="hidden">
+    <label for="password">New password</label>
+    <input id="password" name="password" type="password" autocomplete="new-password" minlength="10" required>
+    <button type="submit">Save password</button>
+  </form>
+  <p class="alt"><a href="/forgot">Send a new link</a></p>
+</main>
+<script>
+const params = new URLSearchParams(location.search);
+document.getElementById("token").value = params.get("token") || "";
+const code = params.get("error");
+if (code === "password") document.getElementById("error").textContent = "Use at least 10 characters.";
+if (code === "expired" || !params.get("token")) document.getElementById("error").textContent = "That link has expired or was already used. Send a new one.";
+</script>
+</body>
+</html>

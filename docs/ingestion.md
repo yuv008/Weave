@@ -23,7 +23,16 @@ The polled sources are GitHub `yuv008/Weave`, the two public Slack channels `#so
 
 The viewer is Yuvraj Sanghai, level 1, department engineering. The person id is the mailbox in `WEAVE_VIEWER_EMAIL`, which is not committed. Slack `users.info` set that person's Slack id and display name, and moved `AUTHORED` and `AUTHORED_BY` onto that node. The other Slack author has a display name and no email, level, or department. GitHub returned no public email, so the old noreply person node was removed after the mailbox id was chosen.
 
-An allow-listed source is the only thing that can advance a checkpoint. A successful page refreshes `source_sync` and embeds non-empty excerpts (`BAAI/bge-small-en-v1.5`, 384 dimensions). A deleted item or an empty excerpt drops its chunk. Tests use a memory store and do not download the model. A live reindex wrote the same 17 chunks.
+An allow-listed source is the only thing that can advance a checkpoint. A successful page refreshes `source_sync`.
+
+**Chunks.**
+- When an upsert applies a new version, the item's full text is cut into chunks of about 1,200 characters at paragraph breaks, overlapping by 150. The text is capped at 100,000 characters.
+- The chunks replace that item's old ones, with no embedding yet. Keyword search finds them at once, and the edge can ingest webhooks without the model.
+- After each page, the worker embeds the company's chunks that have no vector (`BAAI/bge-small-en-v1.5`, 384 dimensions).
+- A replayed version is not re-chunked, and an unchanged item is never re-embedded.
+- A deleted item or an empty one has no chunks.
+- The graph keeps only the 280-character excerpt.
+- `python -m scripts.reread_sources --tenant <id>` makes the worker read a company's items again, which is how items stored before chunking got their full text.
 
 `search_context` on `co:real`, in keyword mode, returned the Drive test doc and the Slack events message. `python -m scripts.ask --local` cited both. No Acme fixture fact appeared.
 
@@ -104,11 +113,11 @@ flowchart TB
 | --- | --- | --- |
 | 1 Fetch | Slack lists public channels and history. Notion searches shared pages. Drive lists Docs in one folder. GitHub lists issues and pull requests, then comments. Gmail lists mailbox messages or `users.history`. Google Calendar lists events with a `syncToken`. HubSpot searches companies and deals by `hs_lastmodifieddate`. | Provider error. The page is not marked complete. |
 | 2 Allow-list | Looks up `slack:{channel}`, `notion:{workspace}`, `gdrive:{folder}`, `github:{owner/repo}`, `gmail:{mailbox}`, `gcal:{calendar}`, or `hubspot:{portal}` in `config/weave.yaml`. | Missing key. The function returns before `ingest_record` is updated. |
-| 3 Normalize | Builds one canonical message or document. Keeps a SHA-256 hash, a 280-character excerpt, and the source URL. Drops the rest of the body. | Malformed record. A failure row is stored and the page does not advance. |
+| 3 Normalize | Builds one canonical message or document. Keeps a SHA-256 hash, a 280-character excerpt, the source URL, and the full text in a `body` field that is never serialized or written to the graph. | Malformed record. A failure row is stored and the page does not advance. |
 | 4 Versioned MERGE | FalkorDB `MERGE` on the stable id. A newer version replaces the excerpt and hash. The same version refreshes edges only. An older version writes nothing. A delete blanks the excerpt and keeps the edges. | The node id is the duplicate key. |
 | 5 Checkpoint | After every record on the page is accepted, write `ingest_record` kind `sync_state`. | A blocked record returns first, so the cursor stays put. |
 | 6 Source sync | On that same success, upsert `source_sync.last_good_sync_at` for the source. The gate hides an item whose group is older than 15 minutes. | Memory stores used by tests do not touch Postgres. |
-| 7 Embed | Read the source's items and upsert one `chunk` per non-empty excerpt, copying `acl_groups` and `min_level`. | Called at the end of a successful Postgres page. A memory store returns immediately. A delete or an empty excerpt removes that chunk. |
+| 7 Chunk and embed | An applied new version replaces the item's chunks from its full text, copying `acl_groups` and `min_level`. The worker embeds pending chunks after each page. | A memory store skips the model. A delete or empty text removes the item's chunks. |
 
 ### What each connector writes
 

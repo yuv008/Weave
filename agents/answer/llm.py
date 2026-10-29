@@ -79,7 +79,8 @@ COMPOSER_PROMPT = (
     "ids that support it, taken from the tool results' citations (item_id or projection_id), or "
     "'path:src|rel|dst' for an edge in a result's path (for structural facts such as ownership). A restricted "
     "citation is an approved summary: state it without quoting. Do not state anything the results do not "
-    "support. Reply with JSON."
+    "support. If results disagree, state the one with the higher authority, or the newer one when authority is "
+    "equal, cite both, and add that another source says otherwise. Reply with JSON."
 )
 
 ANSWER_SCHEMA = {

@@ -1,6 +1,6 @@
 # Accounts and security
 
-This page covers how companies, people, tokens, and limits work on the hosted pages, and what keeps one company's data away from another's. Deployment state is in [deployment.md](deployment.md). Rows marked *(account changes)* are committed but not deployed yet.
+This page covers how companies, people, tokens, and limits work on the hosted pages, and what keeps one company's data away from another's. Deployment state is in [deployment.md](deployment.md). Parts marked *(account changes)* went live on 29 October 2026.
 
 ## Companies and people
 

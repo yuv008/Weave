@@ -1,6 +1,6 @@
 # Deployment
 
-**As of 28 October 2026.** Weave runs in the AWS project in the selected Region `ap-southeast-2` (Sydney). Neon stays in Ohio. FalkorDB stays in Mumbai. Nothing in this layout moves either database.
+**As of 29 October 2026.** Weave runs in the AWS project in the selected Region `ap-southeast-2` (Sydney). Neon stays in Ohio. FalkorDB stays in Mumbai. Nothing in this layout moves either database.
 
 The home tenant is `real`. Its graph is `co:real`. `config/weave.yaml` still says `tenant: acme`, so the task environment sets `WEAVE_TENANT=real` and `WEAVE_TENANT_ID=real`. Other companies sign up on the hosted pages and get their own tenant and graph; see [accounts-and-security.md](accounts-and-security.md).
 
@@ -12,10 +12,10 @@ Both services are running. Running both costs about **$0.14 per hour** (about $3
 
 | What | State |
 | --- | --- |
-| `weave-edge` | Running image `weave:api-security2` (`sha256:d5aa1a80…`) |
+| `weave-edge` | Running image `weave:api-accounts` (`sha256:8e3eb787…`), with `SMTP_USER` and `SMTP_PASSWORD` |
 | `weave-worker` | Running task definition `weave-worker:6`, image `weave:worker-security2` (`sha256:d5364908…`) |
-| Migrations | 001–013 applied on Neon |
-| Committed, not deployed | Per-company Groq key, sign out, password reset, email verification, team invites. They need migrations 014 and 015, the `SMTP_*` parameters, and a new edge image. See [Shipping the account changes](#shipping-the-account-changes). |
+| Migrations | 001–015 applied on Neon |
+| Live since 29 October 2026 | Per-company Groq key, sign out, password reset, email verification, team invites |
 
 ## What is running
 
@@ -66,7 +66,7 @@ Secret values live in Systems Manager Parameter Store as `SecureString` paramete
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` | both. They mint installation tokens |
 | `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` | edge. They check that the signed-in GitHub user can reach an install |
 | `GROQ_API_KEY` | both. It is the shared model key |
-| `SMTP_USER`, `SMTP_PASSWORD` | edge, once the account changes ship. Gmail sends verify, reset, and invite mail |
+| `SMTP_USER`, `SMTP_PASSWORD` | edge. Gmail sends verify, reset, and invite mail |
 
 `WEAVE_PUBLIC_URL` and `WEAVE_AGENT_URL` are both the public origin, with no path. Account links in email use `WEAVE_PUBLIC_URL`.
 
@@ -83,7 +83,7 @@ Build from this repository on a machine with Docker. Building from a branch that
 
 ## Shipping the account changes
 
-The per-company model key, sign out, reset, verification, and invites are committed but not deployed. In order:
+The per-company model key, sign out, reset, verification, and invites shipped on 29 October 2026 in this order. Repeat it if the edge is rebuilt from scratch:
 
 1. Apply `migrations/014_accounts_email.sql` and `migrations/015_model_usage.sql`. 014 marks accounts made before 29 October 2026 as verified.
 2. Store `SMTP_USER` (the Gmail address) and `SMTP_PASSWORD` (a Google app password) under `/weave/real/`. Add both to the edge container's `secrets`.

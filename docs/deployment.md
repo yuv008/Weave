@@ -12,10 +12,20 @@ Both services are running. Running both costs about **$0.14 per hour** (about $3
 
 | What | State |
 | --- | --- |
-| `weave-edge` | Running image `weave:api-accounts` (`sha256:8e3eb787…`), with `SMTP_USER` and `SMTP_PASSWORD` |
-| `weave-worker` | Running task definition `weave-worker:6`, image `weave:worker-security2` (`sha256:d5364908…`) |
+| `weave-edge` | Running image `weave:api-clean`, with `SMTP_USER` and `SMTP_PASSWORD` |
+| `weave-worker` | Running task definition `weave-worker:7`, image `weave:worker-clean` |
 | Migrations | 001–015 applied on Neon |
 | Live since 29 October 2026 | Per-company Groq key, sign out, password reset, email verification, team invites |
+| Live since 29 October 2026, later | Org-wide sources tagged `org:all` (backfilled with `scripts.apply_source_acl`); retries scoped to their company; a grant fails only on rejected credentials; every connector loop starts at boot; GitHub bot posts skipped |
+| Built, not yet deployed | Full-text chunking, Notion nested blocks, search merging duplicates and preferring more authoritative sources. After deploying, run `scripts.reread_sources` for each company |
+
+### One-off data scripts
+
+Each takes `--dry-run` and prints counts only.
+
+- `scripts.apply_source_acl` brings access tags in line with each source's policy.
+- `scripts.prune_source --tenant <id> --group <group>` deletes a source's data. `--github-bots` deletes GitHub posts written by bots.
+- `scripts.reread_sources --tenant <id>` makes the worker re-read a company's items.
 
 ## What is running
 

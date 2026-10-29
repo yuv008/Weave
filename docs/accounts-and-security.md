@@ -108,6 +108,10 @@ The agent also limits each token: `/answer` and `/wisp/mail` at 20 a minute, and
 
   The browser picks `installation_id`, so it is never trusted on its own.
 - **Connected sources.** Sources listed in `config/weave.yaml` are allowed for every company. A source a company connects adds a `connected_source` row that allows it for **that company only**. A lookup that misses reads Postgres again, so a source the worker added is seen by the edge.
+- **Who reads a source's items.**
+  - An org-wide source tags its items, source node and chunks with its own group plus `org:all`, so everyone in the company can read them. Connected Slack, Notion, Drive, and public GitHub sources are org-wide.
+  - Any other source carries only its own group, and the company owners get a membership for it. That covers private repositories and configured sources without `org_wide: true`.
+- **Retries** of failed items only touch the calling company's failures.
 - **Owner-only tables.** These tables have no row-level policy, and `weave_app` holds no grant on them:
   - `connection_secret`, `app_user`, `tenant_membership`, `app_session`, `login_attempt`,
   - `connected_source`, `model_usage`, `email_token`, `invite`.

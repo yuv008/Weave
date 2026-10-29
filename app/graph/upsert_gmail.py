@@ -7,6 +7,7 @@ from app.graph.link_author import link_author
 from app.graph.policy import allowed_source, gmail_source_id
 from app.graph.upsert import UpsertResult
 from app.models.canonical_gmail import CanonicalGmailMessage
+from shared.config import source_acl
 from shared.schema import Label, Prop, Rel
 from shared.timefmt import to_ts
 
@@ -136,7 +137,7 @@ def _params(message: CanonicalGmailMessage, ingested_at: datetime, group: str, p
         "source_url": message.source_url,
         "visibility": message.visibility,
         "now": to_ts(ingested_at),
-        "acl_groups": [group],
+        "acl_groups": source_acl(group, policy),
         "min_level": policy.min_level,
         "source_name": policy.name,
         "cascade_policy": policy.cascade_policy,

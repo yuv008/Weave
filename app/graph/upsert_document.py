@@ -23,6 +23,7 @@ from app.graph.policy import (
 from app.graph.link_author import link_author, purge_legacy_item_edges
 from app.graph.upsert import UpsertResult
 from app.models.canonical_document import CanonicalDocument
+from shared.config import source_acl
 from shared.schema import Label, Prop, Rel
 from shared.timefmt import to_ts
 
@@ -248,7 +249,7 @@ def _params(document, ingested_at, system, group, policy, source_node) -> dict:
         "author_email": document.author_email,
         "parent_external_id": document.parent_external_id or "",
         "now": to_ts(ingested_at),
-        "acl_groups": [group],
+        "acl_groups": source_acl(group, policy),
         "min_level": policy.min_level,
         "source_id": source_node,
         "source_external_id": external,

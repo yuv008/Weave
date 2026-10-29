@@ -20,6 +20,7 @@ from typing import Protocol
 from app.graph.link_author import purge_legacy_item_edges
 from app.graph.policy import allowed_source, slack_source_id
 from app.models.canonical import CanonicalMessage, message_node_id
+from shared.config import source_acl
 from shared.schema import Label, Prop, Rel
 from shared.timefmt import to_ts
 
@@ -196,7 +197,7 @@ def _message_params(message: CanonicalMessage, ingested_at: datetime, group: str
         "source_url": message.source_url,
         "visibility": message.visibility,
         "now": to_ts(ingested_at),
-        "acl_groups": [group],
+        "acl_groups": source_acl(group, policy),
         "min_level": policy.min_level,
         "source_name": policy.name,
         "cascade_policy": policy.cascade_policy,

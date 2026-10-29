@@ -205,3 +205,47 @@ def test_reply_before_parent_creates_a_placeholder_that_is_filled(graph):
     )
     assert replies[0][0] == 1
     assert author_id[0][0] == "U2"
+
+
+def _acl_written(graph) -> list:
+    return graph.calls[0][1]["acl_groups"]
+
+
+def test_an_org_wide_source_writes_org_all_so_the_whole_company_can_read_it():
+    graph = FakeGraph([[True]])
+    upsert_message(graph, _message(external_id="C0ENGPUB:1403051575.000407", conversation_external_id="C0ENGPUB"))
+
+    assert _acl_written(graph) == ["slack:C0ENGPUB", "org:all"]
+
+
+def test_a_source_that_is_not_org_wide_keeps_only_its_own_group():
+    graph = FakeGraph([[True]])
+    upsert_message(graph, _message())
+
+    assert _acl_written(graph) == ["slack:C0ENGSSO"]
+
+
+def test_a_member_reads_an_org_wide_repo_item_but_not_a_team_repo_item():
+    from agents.gate.rules import item_is_visible, person_groups
+    from app.graph.upsert_document import upsert_document
+    from app.models.canonical_document import CanonicalDocument
+    from shared.schema import Prop
+
+    def written(repo):
+        graph = FakeGraph([[True]])
+        now = datetime(2026, 10, 29, tzinfo=UTC)
+        upsert_document(graph, CanonicalDocument(
+            tenant_id="tenant1", connection_id="conn1", source="github", workspace_id="1",
+            external_id="issue:1", occurred_at=now, updated_at=now, version="v1",
+            source_url="", content_hash=hashlib.sha256(b"").hexdigest(), kind="issue",
+            repo_slug=repo,
+        ))
+        return graph.calls[0][1]["acl_groups"]
+
+    member = person_groups("tenant1:person:bo@north.test", 0, {})
+    public = written("demo-org/roadmap")
+    team = written("demo-org/platform")
+    fresh = {"github:demo-org/roadmap", "github:demo-org/platform"}
+
+    assert item_is_visible({Prop.MIN_LEVEL: 0, Prop.ACL_GROUPS: public}, 0, member, fresh)
+    assert not item_is_visible({Prop.MIN_LEVEL: 0, Prop.ACL_GROUPS: team}, 0, member, fresh)

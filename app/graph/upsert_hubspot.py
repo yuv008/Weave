@@ -7,6 +7,7 @@ from app.graph.upsert import UpsertResult
 from app.graph.upsert_document import upsert_document
 from app.hubspot.normalize import HubspotCompany, HubspotDeal
 from shared.ids import person_id
+from shared.config import source_acl
 from shared.schema import Label, Prop, Rel
 from shared.timefmt import to_ts
 
@@ -134,7 +135,7 @@ SET
             "tenant_id": tenant_id,
             "portal": portal,
             "source_name": policy.name,
-            "acl_groups": [group],
+            "acl_groups": source_acl(group, policy),
             "min_level": policy.min_level,
             "cascade_policy": policy.cascade_policy,
             "authority": policy.authority,

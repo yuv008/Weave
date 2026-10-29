@@ -123,31 +123,37 @@ sources:
     min_level: 0
     cascade_policy: manual
     authority: 2
+    org_wide: true
   "github:yuv008/portfolio":
     name: "Portfolio"
     min_level: 0
     cascade_policy: manual
     authority: 2
+    org_wide: true
   "slack:C0C90JZ4YMP":
     name: "social"
     min_level: 0
     cascade_policy: manual
     authority: 1
+    org_wide: true
   "slack:C0C9T2JTLJC":
     name: "all-new-workspace"
     min_level: 0
     cascade_policy: manual
     authority: 1
+    org_wide: true
   "notion:de87560e-92b0-81e5-b99a-000341cccd77":
     name: "Notion workspace"
     min_level: 0
     cascade_policy: manual
     authority: 3
+    org_wide: true
   "gdrive:1xAh9x70Ji3LLE0dPCxfdBWFxSRMkGdkN":
     name: "Drive folder"
     min_level: 0
     cascade_policy: manual
     authority: 3
+    org_wide: true
   "gmail:sales@example.com":
     name: "Sales mailbox"
     min_level: 1

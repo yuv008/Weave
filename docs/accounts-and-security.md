@@ -118,7 +118,7 @@ The agent also limits each token: `/answer` and `/wisp/mail` at 20 a minute, and
 
 - **Who sees them.** A private repository is readable by the company **owners** only. A public one is readable by the whole company at level 0. A repository whose privacy cannot be read counts as private.
 - **When it is checked.** The worker checks privacy on every poll. For a private repository it narrows the `connected_source` row, gives each owner a `group_membership` for the repository's ACL group, and bumps the company's `acl_epoch` so cached access refreshes. A row is narrowed automatically but never widened.
-- **Items saved earlier.** Items stored before a repository was narrowed keep their old ACL until GitHub sends a new version. `python -m scripts.restrict_private_repos [--dry-run]` takes `org:all` off them. It was run on 28 October 2026 and found nothing left to narrow.
+- **Items saved earlier.** Items stored before a policy changed keep their old tags until the source sends a new version. `python -m scripts.apply_source_acl [--dry-run]` brings items, source nodes, and chunks in line with every source's policy, and gives owners their memberships for owner-only sources.
 
 ## Known gaps
 

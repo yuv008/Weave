@@ -108,10 +108,12 @@ def delete_failure(store, node_id: str) -> None:
     store.delete(node_id)
 
 
-def retryable_failures(store) -> list[tuple]:
+def retryable_failures(store, tenant_id: str) -> list[tuple]:
+    """This company's Slack failures only: another company's token cannot fetch them."""
+
     rows = []
     for row in store.list_kind(SYNC_FAILURE):
-        if ":slack:failure:" not in row["id"]:
+        if ":slack:failure:" not in row["id"] or row["tenant_id"] != tenant_id:
             continue
         payload = row["payload"]
         if int(payload.get("attempts") or 0) >= 5:

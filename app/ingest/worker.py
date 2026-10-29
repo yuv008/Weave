@@ -93,11 +93,11 @@ def backfill_public_channels(
     enrich_slack_authors(graph, client, tenant_id)
 
 
-def retry_failures(graph, client, *, workspace_domain: str | None = None, store=None) -> None:
-    """Refetch failed messages one at a time. This does not call history."""
+def retry_failures(graph, client, *, tenant_id: str, workspace_domain: str | None = None, store=None) -> None:
+    """Refetch this company's failed messages one at a time. This does not call history."""
 
     records = open_store(store)
-    for row in retryable_failures(records):
+    for row in retryable_failures(records, tenant_id):
         (
             node_id,
             tenant_id,

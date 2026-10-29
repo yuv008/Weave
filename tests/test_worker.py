@@ -227,7 +227,7 @@ def test_retry_fetches_one_message_without_history(graph):
         },
     )
     client = RetryClient()
-    retry_failures(graph, client, store=store)
+    retry_failures(graph, client, tenant_id=TENANT, store=store)
 
     assert client.history_calls == 0
     assert client.fetch_calls == 1
@@ -266,11 +266,11 @@ def test_fifth_failure_stays_on_the_list(graph):
     assert failure_attempts(store, node) == 4
 
     client = Broken()
-    retry_failures(graph, client, store=store)
+    retry_failures(graph, client, tenant_id=TENANT, store=store)
     assert client.calls == 1
     assert failure_attempts(store, node) == 5
 
-    retry_failures(graph, client, store=store)
+    retry_failures(graph, client, tenant_id=TENANT, store=store)
     assert client.calls == 1
 
 

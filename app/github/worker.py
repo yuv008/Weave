@@ -139,11 +139,12 @@ def poll_repository(tenant_id: str, connection_id: str, owner: str, repo: str, c
         page = listed.next_page
 
 
-def retry_github_failures(graph, client, store=None) -> None:
+def retry_github_failures(graph, client, store=None, *, tenant_id: str) -> None:
     records = open_store(store)
     rows = []
     for row in records.list_kind(SYNC_FAILURE):
-        if ":github:failure:" not in row["id"]:
+        # Another company's token would 404 and use up that company's attempts.
+        if ":github:failure:" not in row["id"] or row["tenant_id"] != tenant_id:
             continue
         payload = row["payload"]
         if int(payload.get("attempts") or 0) >= 5:

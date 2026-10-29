@@ -378,7 +378,7 @@ def test_retry_fetches_one_issue_without_the_list(graph):
     store = MemoryStore()
     _seed_failure(store, "issue:4", "4")
     client = Client()
-    retry_github_failures(graph, client, store)
+    retry_github_failures(graph, client, store, tenant_id="demo")
     assert client.calls == [("get_issue", "4")]
     assert store.get(failure) is None
     excerpt = graph.query(
@@ -414,7 +414,7 @@ def test_retry_404_tombstones_a_stored_issue_and_keeps_an_unknown_one(graph):
     store = MemoryStore()
     _seed_failure(store, "issue:4", "4")
     _seed_failure(store, "issue:8", "8")
-    retry_github_failures(graph, Missing(), store)
+    retry_github_failures(graph, Missing(), store, tenant_id="demo")
     assert graph.query("MATCH (i:Issue {id: $id}) RETURN i.excerpt, i.deleted", {"id": issue.node_id}).result_set[0] == ["", True]
     assert store.get(stored) is None
     assert store.get(unknown)["payload"]["attempts"] == 2
@@ -439,7 +439,7 @@ def test_fifth_github_failure_stays(graph):
         def list_comments(self, *args):
             raise AssertionError("comments")
 
-    retry_github_failures(graph, Client(), store)
+    retry_github_failures(graph, Client(), store, tenant_id="demo")
     assert store.get(failure)["payload"]["attempts"] == 5
 
 

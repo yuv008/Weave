@@ -115,11 +115,13 @@ def poll_folder(tenant_id: str, connection_id: str, folder_id: str, client, grap
         token = next_token
 
 
-def retry_drive_failures(graph, client, store=None) -> None:
+def retry_drive_failures(graph, client, store=None, *, tenant_id: str) -> None:
     records = open_store(store)
     rows = []
     for row in records.list_kind(SYNC_FAILURE):
         payload = row["payload"]
+        if row["tenant_id"] != tenant_id:
+            continue
         if not payload.get("file_id") or int(payload.get("attempts") or 0) >= 5:
             continue
         rows.append(

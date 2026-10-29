@@ -196,7 +196,7 @@ def _slack_once(tenant: str | None = None) -> bool:
         incremental=True,
         accept_new=bool(tenant) and chosen != home,
     )
-    retry_failures(graph, client, workspace_domain=domain)
+    retry_failures(graph, client, tenant_id=chosen, workspace_domain=domain)
     return True
 
 
@@ -225,7 +225,7 @@ def _notion_once(tenant: str | None = None) -> bool:
         client,
         graph,
     )
-    retry_notion_failures(graph, client)
+    retry_notion_failures(graph, client, tenant_id=chosen)
     return True
 
 
@@ -261,7 +261,7 @@ def _drive_once(tenant: str | None = None) -> bool:
         client,
         graph,
     )
-    retry_drive_failures(graph, client)
+    retry_drive_failures(graph, client, tenant_id=chosen)
     return True
 
 
@@ -299,7 +299,7 @@ def _github_once(tenant: str | None = None) -> bool:
             client,
             graph,
         )
-    retry_github_failures(graph, client)
+    retry_github_failures(graph, client, tenant_id=chosen)
     return True
 
 

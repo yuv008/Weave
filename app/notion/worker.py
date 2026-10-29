@@ -129,11 +129,13 @@ def poll_shared_pages(tenant_id: str, connection_id: str, workspace_id: str, cli
         cursor = next_cursor
 
 
-def retry_notion_failures(graph, client, store=None) -> None:
+def retry_notion_failures(graph, client, store=None, *, tenant_id: str) -> None:
     records = open_store(store)
     rows = []
     for row in records.list_kind(SYNC_FAILURE):
         payload = row["payload"]
+        if row["tenant_id"] != tenant_id:
+            continue
         if not payload.get("page_id") or int(payload.get("attempts") or 0) >= 5:
             continue
         rows.append(

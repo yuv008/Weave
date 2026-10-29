@@ -12,12 +12,13 @@ Both services are running. Running both costs about **$0.14 per hour** (about $3
 
 | What | State |
 | --- | --- |
-| `weave-edge` | Running image `weave:api-clean`, with `SMTP_USER` and `SMTP_PASSWORD` |
-| `weave-worker` | Running task definition `weave-worker:7`, image `weave:worker-clean` |
+| `weave-edge` | Running image `weave:api-search3`, with `SMTP_USER` and `SMTP_PASSWORD` |
+| `weave-worker` | Running task definition `weave-worker:8`, image `weave:worker-search3` |
 | Migrations | 001–015 applied on Neon |
 | Live since 29 October 2026 | Per-company Groq key, sign out, password reset, email verification, team invites |
 | Live since 29 October 2026, later | Org-wide sources tagged `org:all` (backfilled with `scripts.apply_source_acl`); retries scoped to their company; a grant fails only on rejected credentials; every connector loop starts at boot; GitHub bot posts skipped |
-| Built, not yet deployed | Full-text chunking, Notion nested blocks, search merging duplicates and preferring more authoritative sources. After deploying, run `scripts.reread_sources` for each company |
+| Live since 29 October 2026, evening | Full-text chunking, Notion nested blocks, Slack channel events skipped, search merging duplicates, equal-score ties going to the more authoritative source, whole chunks passed to the answer step. Tested end to end against the real Slack, Notion, and GitHub APIs first. `scripts.reread_sources` was run for `real`, `pict`, and `12345` |
+| Pending | The `scripts.prune_source` deletions of the stale Gmail, calendar, HubSpot, and `portfolio` data and of GitHub bot posts |
 
 ### One-off data scripts
 

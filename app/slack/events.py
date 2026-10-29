@@ -85,7 +85,7 @@ def apply_slack_event(
         return {"ok": True}
     if allowed_source("slack", channel_id, tenant_id) is None:
         return {"ok": True}
-    upsert_message(graph, message, now=datetime.now(UTC))
+    upsert_message(graph, message, now=datetime.now(UTC), store=records)
     mark_event_applied(records, event_id, tenant_id)
     return {"ok": True}
 

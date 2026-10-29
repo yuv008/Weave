@@ -46,6 +46,7 @@ def normalize_notion_page(
         deleted=deleted,
         source_url=url,
         excerpt="" if deleted else text[:EXCERPT_LIMIT],
+        body=text,
         content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
         author_external_id=author_id,
         author_email=author_email,

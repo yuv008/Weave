@@ -320,6 +320,7 @@ def create_app(
             owner=app.state.github_owner,
             repo=app.state.github_repo,
             delivery_id=request.headers.get("x-github-delivery", ""),
+            store=_records(app),
         )
 
     @app.post("/slack/decisions")

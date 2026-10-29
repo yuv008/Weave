@@ -615,7 +615,7 @@ def test_bot_posts_are_not_stored_but_the_watermark_moves_past_them(monkeypatch)
             return Empty()
 
     stored = []
-    monkeypatch.setattr(worker, "upsert_document", lambda graph, document: stored.append(document.external_id))
+    monkeypatch.setattr(worker, "upsert_document", lambda graph, document, **kw: stored.append(document.external_id))
     bot = {**_issue(7, "2026-03-12T00:00:00Z", pull={"url": "x"}), "user": {"login": "dependabot[bot]", "type": "Bot"}}
 
     class Client:

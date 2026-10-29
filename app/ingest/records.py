@@ -62,17 +62,28 @@ class MemoryStore:
             self._chunks = chunks
         return chunks
 
-    def replace_chunks(self, rows: list[dict]) -> None:
+    def replace_item_chunks(self, item_id: str, rows: list[dict]) -> None:
+        self.delete_chunks([item_id])
         chunks = self.__init_chunks()
         for row in rows:
-            chunks[row["id"]] = row
+            chunks[row["id"]] = {**row, "embedding": None}
 
     def delete_chunks(self, item_ids: list[str]) -> None:
         chunks = self.__init_chunks()
-        drop = {f"{item_id}:chunk:0" for item_id in item_ids}
-        for chunk_id in list(chunks):
-            if chunk_id in drop:
-                del chunks[chunk_id]
+        drop = set(item_ids)
+        for chunk_id in [key for key, row in chunks.items() if row["item_id"] in drop]:
+            del chunks[chunk_id]
+
+    def pending_chunks(self, tenant_id: str, limit: int) -> list[tuple[str, str]]:
+        rows = [(key, row["text"]) for key, row in self.__init_chunks().items()
+                if row["tenant_id"] == tenant_id and row.get("embedding") is None]
+        return rows[:limit]
+
+    def set_embeddings(self, pairs: list[tuple[str, list[float]]]) -> None:
+        chunks = self.__init_chunks()
+        for chunk_id, vector in pairs:
+            if chunk_id in chunks:
+                chunks[chunk_id]["embedding"] = vector
 
     def record_change(self, tenant_id: str, fact_id: str, kind: str, new_fact_id: str) -> None:
         self.changes.append(
@@ -145,34 +156,21 @@ class PostgresStore:
             (tenant_id, source_id, acl_group),
         )
 
-    def replace_chunks(self, rows: list[dict]) -> None:
-        if not rows:
-            return
-        from fixtures.seed import vector_literal
+    def replace_item_chunks(self, item_id: str, rows: list[dict]) -> None:
+        """One item's chunks, in one transaction, with no embedding until the worker adds it."""
 
         conn = self._connect()
         try:
             with conn.cursor() as cur:
+                cur.execute("DELETE FROM chunk WHERE item_id = %s", (item_id,))
                 cur.executemany(
                     """
                     INSERT INTO chunk (id, tenant_id, item_id, ordinal, text, embedding, acl_groups, min_level)
-                    VALUES (%s, %s, %s, 0, %s, %s::vector, %s, %s)
-                    ON CONFLICT (id) DO UPDATE SET
-                      text = EXCLUDED.text,
-                      embedding = COALESCE(EXCLUDED.embedding, chunk.embedding),
-                      acl_groups = EXCLUDED.acl_groups,
-                      min_level = EXCLUDED.min_level
+                    VALUES (%s, %s, %s, %s, %s, NULL, %s, %s)
                     """,
                     [
-                        (
-                            row["id"],
-                            row["tenant_id"],
-                            row["item_id"],
-                            row["text"],
-                            vector_literal(row.get("embedding")),
-                            row["acl_groups"],
-                            row["min_level"],
-                        )
+                        (row["id"], row["tenant_id"], row["item_id"], row["ordinal"], row["text"],
+                         row["acl_groups"], row["min_level"])
                         for row in rows
                     ],
                 )
@@ -187,6 +185,36 @@ class PostgresStore:
         try:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM chunk WHERE item_id = ANY(%s)", (item_ids,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def pending_chunks(self, tenant_id: str, limit: int) -> list[tuple[str, str]]:
+        conn = self._connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, text FROM chunk WHERE tenant_id = %s AND embedding IS NULL ORDER BY id LIMIT %s",
+                    (tenant_id, limit),
+                )
+                rows = cur.fetchall()
+            conn.commit()
+        finally:
+            conn.close()
+        return [(row[0], row[1]) for row in rows]
+
+    def set_embeddings(self, pairs: list[tuple[str, list[float]]]) -> None:
+        if not pairs:
+            return
+        from fixtures.seed import vector_literal
+
+        conn = self._connect()
+        try:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    "UPDATE chunk SET embedding = %s::vector WHERE id = %s",
+                    [(vector_literal(vector), chunk_id) for chunk_id, vector in pairs],
+                )
             conn.commit()
         finally:
             conn.close()

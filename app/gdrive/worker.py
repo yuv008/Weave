@@ -8,7 +8,7 @@ from app.gdrive.client import DOC_MIME
 from app.gdrive.normalize import normalize_drive_file
 from app.graph.policy import allowed_source, drive_source_id
 from app.graph.upsert import ensure_indexes
-from app.ingest.chunks import index_source
+from app.ingest.chunks import embed_pending
 from app.graph.upsert_document import upsert_document
 from app.ingest.log import format_document_log
 from app.ingest.records import SYNC_FAILURE, SYNC_STATE, open_store
@@ -98,7 +98,7 @@ def poll_folder(tenant_id: str, connection_id: str, folder_id: str, client, grap
         )
         source = drive_source_id(tenant_id, folder_id)
         records.note_source_sync(tenant_id, source, group)
-        index_source(graph, records, source)
+        embed_pending(records, tenant_id)
         logger.info(
             "%s",
             format_document_log(
@@ -146,7 +146,7 @@ def retry_drive_failures(graph, client, store=None, *, tenant_id: str) -> None:
             )
             if document is None:
                 raise ValueError("not a document")
-            upsert_document(graph, document)
+            upsert_document(graph, document, store=records)
         except ValueError:
             _remember(records, tenant_id, connection_id, folder_id, file_id, "ValueError")
             continue
@@ -172,7 +172,7 @@ def _ingest(raw, tenant_id, connection_id, folder_id, client, graph, store) -> s
         return "blocked"
     if document is None:
         return "skipped"
-    upsert_document(graph, document)
+    upsert_document(graph, document, store=store)
     store.delete(failure)
     return "ok"
 

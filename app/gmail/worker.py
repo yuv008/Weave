@@ -8,7 +8,7 @@ from app.gmail.normalize import normalize_gmail_message
 from app.graph.policy import allowed_source, gmail_source_id
 from app.graph.upsert import ensure_indexes
 from app.graph.upsert_gmail import upsert_gmail_message
-from app.ingest.chunks import index_source
+from app.ingest.chunks import embed_pending
 from app.ingest.log import format_document_log
 from app.ingest.records import SYNC_STATE, open_store
 from app.ingest.state import write_connection
@@ -118,7 +118,7 @@ def _poll_history(
                 },
             )
             records.note_source_sync(tenant_id, gmail_source_id(tenant_id, mailbox), group)
-            index_source(graph, records, gmail_source_id(tenant_id, mailbox))
+            embed_pending(records, tenant_id)
             logger.info(
                 "%s",
                 format_document_log(
@@ -179,7 +179,7 @@ def _poll_full(
     )
     if finished and latest_history:
         records.note_source_sync(tenant_id, gmail_source_id(tenant_id, mailbox), group)
-        index_source(graph, records, gmail_source_id(tenant_id, mailbox))
+        embed_pending(records, tenant_id)
     logger.info(
         "%s",
         format_document_log(

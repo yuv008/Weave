@@ -143,8 +143,9 @@ def upsert_message(
     message: CanonicalMessage,
     *,
     now: datetime | None = None,
+    store=None,
 ) -> UpsertResult:
-    """Upsert one message. An unknown channel is not written."""
+    """Upsert one message. An unknown channel is not written. With a store, a new version is re-chunked."""
 
     allowed = allowed_source("slack", message.conversation_external_id, message.tenant_id)
     if allowed is None:
@@ -172,6 +173,13 @@ def upsert_message(
                 "parent_ext": message.thread_parent_external_id,
                 "empty_hash": _EMPTY_HASH,
             },
+        )
+    if store is not None and rows[0][0]:
+        from app.ingest.chunks import write_item_chunks  # app.ingest imports this module
+
+        write_item_chunks(
+            store, tenant_id=message.tenant_id, item_id=message.node_id, body=message.body,
+            acl_groups=params["acl_groups"], min_level=params["min_level"], deleted=message.deleted,
         )
     return UpsertResult(node_id=message.node_id, applied=True)
 

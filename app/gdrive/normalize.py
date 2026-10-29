@@ -42,6 +42,7 @@ def normalize_drive_file(
         deleted=deleted,
         source_url=f"https://drive.google.com/file/d/{file_id}/view",
         excerpt="" if deleted else text[:EXCERPT_LIMIT],
+        body=text,
         content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
         author_email=author_email,
         author_name=author_name,

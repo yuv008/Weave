@@ -8,7 +8,7 @@ from app.gcal.normalize import normalize_calendar_event
 from app.graph.policy import allowed_source, gcal_source_id
 from app.graph.upsert import ensure_indexes
 from app.graph.upsert_document import upsert_document
-from app.ingest.chunks import index_source
+from app.ingest.chunks import embed_pending
 from app.ingest.log import format_document_log
 from app.ingest.records import SYNC_STATE, open_store
 from app.ingest.state import write_connection
@@ -83,7 +83,7 @@ def poll_calendar(tenant_id: str, connection_id: str, calendar_id: str, client, 
         )
         if finished:
             records.note_source_sync(tenant_id, gcal_source_id(tenant_id, calendar_id), group)
-            index_source(graph, records, gcal_source_id(tenant_id, calendar_id))
+            embed_pending(records, tenant_id)
         logger.info(
             "%s",
             format_document_log(

@@ -112,6 +112,7 @@ def normalize_slack_message(
         deleted=deleted,
         source_url=_archive_url(workspace_domain, channel_id, message_ts),
         excerpt="" if deleted else full_text[:EXCERPT_LIMIT],
+        body=full_text,
         content_hash=hashlib.sha256(full_text.encode("utf-8")).hexdigest(),
         metadata=_metadata(raw),
     )

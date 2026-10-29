@@ -11,7 +11,7 @@ import time
 
 from app.graph.policy import allowed_source, slack_source_id
 from app.graph.upsert import ensure_indexes, upsert_message
-from app.ingest.chunks import index_source
+from app.ingest.chunks import embed_pending
 from app.ingest.log import log_page
 from app.ingest.records import open_store
 from app.ingest.state import (
@@ -123,7 +123,7 @@ def retry_failures(graph, client, *, tenant_id: str, workspace_domain: str | Non
             )
             if message is None:
                 raise ValueError("non-public message")
-            upsert_message(graph, message)
+            upsert_message(graph, message, store=records)
         except ValueError:
             record_failure(
                 records,
@@ -274,7 +274,7 @@ def _sync_channel(
         )
         source = slack_source_id(tenant_id, workspace_id, channel_id)
         store.note_source_sync(tenant_id, source, group)
-        index_source(graph, store, source)
+        embed_pending(store, tenant_id)
         log_page(
             logger,
             tenant_id=tenant_id,
@@ -458,7 +458,7 @@ def _ingest_one(
         return "blocked"
     if message is None:
         raise RuntimeError("public backfill produced an empty message")
-    upsert_message(graph, message)
+    upsert_message(graph, message, store=store)
     delete_failure(store, node)
     return "ok"
 

@@ -1,7 +1,8 @@
 """Canonical document shared by Notion and Google Drive.
 
-The full body is not a field. Callers hash it, copy a 280-character prefix
-into ``excerpt``, and drop the rest.
+Callers hash the full body and copy a 280-character prefix into ``excerpt``
+for the graph. ``body`` carries the full text to the chunk table only; it is
+never written to the graph.
 """
 
 from datetime import datetime
@@ -33,6 +34,7 @@ class CanonicalDocument(BaseModel):
     deleted: bool = False
     source_url: str = ""
     excerpt: str = Field(default="", max_length=EXCERPT_LIMIT)
+    body: str = Field(default="", repr=False, exclude=True)
     content_hash: str
     visibility: str = "demo_single_tenant"
     kind: str = ""

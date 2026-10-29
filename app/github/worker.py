@@ -8,7 +8,7 @@ from app.github.client import GitHubRequestError
 from app.github.normalize import is_bot, normalize_github_comment, normalize_github_issue
 from app.graph.policy import allowed_source, github_source_id
 from app.graph.upsert import ensure_indexes
-from app.ingest.chunks import index_source
+from app.ingest.chunks import embed_pending
 from app.graph.upsert_document import upsert_document
 from app.ingest.log import format_github_log
 from app.ingest.records import SYNC_FAILURE, SYNC_STATE, open_store
@@ -136,7 +136,7 @@ def poll_repository(tenant_id: str, connection_id: str, owner: str, repo: str, c
         )
         source = github_source_id(tenant_id, f"{owner}/{repo}")
         records.note_source_sync(tenant_id, source, group)
-        index_source(graph, records, source)
+        embed_pending(records, tenant_id)
         _log(tenant_id, repo_id, len(issues), 0, started, "")
         if finished:
             return
@@ -172,7 +172,7 @@ def retry_github_failures(graph, client, store=None, *, tenant_id: str) -> None:
             if kind == "comment":
                 found = _find_comment(client, owner, repo, str(number), external_id)
                 if found is None:
-                    if _tombstone_if_stored(graph, tenant_id, connection_id, repo_id, external_id, owner, repo, kind):
+                    if _tombstone_if_stored(graph, tenant_id, connection_id, repo_id, external_id, owner, repo, kind, records):
                         _delete_failure(records, node_id)
                     else:
                         _remember(
@@ -200,10 +200,10 @@ def retry_github_failures(graph, client, store=None, *, tenant_id: str) -> None:
                     repo=repo or "",
                     kind="pull_request" if kind == "pull_request" else None,
                 )
-            upsert_document(graph, document)
+            upsert_document(graph, document, store=records)
         except GitHubRequestError as exc:
             if exc.status == 404 and _tombstone_if_stored(
-                graph, tenant_id, connection_id, repo_id, external_id, owner, repo, kind or "issue"
+                graph, tenant_id, connection_id, repo_id, external_id, owner, repo, kind or "issue", records
             ):
                 _delete_failure(records, node_id)
                 continue
@@ -295,7 +295,7 @@ def _ingest_issue(raw, tenant_id, connection_id, repo_id, owner, repo, graph, st
     except ValueError:
         _remember(store, tenant_id, connection_id, repo_id, owner, repo, str(number or ""), external_id, "issue", "ValueError")
         return "blocked"
-    upsert_document(graph, document)
+    upsert_document(graph, document, store=store)
     _delete_failure(store, failure)
     return "ok"
 
@@ -319,7 +319,7 @@ def _ingest_comment(raw, tenant_id, connection_id, repo_id, owner, repo, number,
     except ValueError:
         _remember(store, tenant_id, connection_id, repo_id, owner, repo, str(number), external_id, "comment", "ValueError")
         return "blocked"
-    upsert_document(graph, document)
+    upsert_document(graph, document, store=store)
     _delete_failure(store, failure)
     return "ok"
 
@@ -338,7 +338,7 @@ def _find_comment(client, owner, repo, number, external_id):
         page = listed.next_page
 
 
-def _tombstone_if_stored(graph, tenant_id, connection_id, repo_id, external_id, owner, repo, kind) -> bool:
+def _tombstone_if_stored(graph, tenant_id, connection_id, repo_id, external_id, owner, repo, kind, store=None) -> bool:
     if not external_id:
         return False
     node_id = _github_node_id(tenant_id, owner, repo, external_id, kind)
@@ -371,6 +371,7 @@ def _tombstone_if_stored(graph, tenant_id, connection_id, repo_id, external_id, 
             parent_external_id=parent_id,
             repo_slug=f"{owner}/{repo}" if owner and repo else "",
         ),
+        store=store,
     )
     return True
 

@@ -44,6 +44,7 @@ def apply_github_event(
     owner: str,
     repo: str,
     delivery_id: str,
+    store=None,
 ) -> dict:
     repository = payload.get("repository")
     if not _same_repo(repository, owner, repo):
@@ -62,7 +63,7 @@ def apply_github_event(
     document = _document(payload, event, action, tenant_id, connection_id, str(repo_id), owner, repo)
     if document is None:
         return {"ok": True}
-    upsert_document(graph, document)
+    upsert_document(graph, document, store=store)
     if scoped:
         graph.query(_MARK, {"id": scoped, "tenant_id": tenant_id})
     return {"ok": True}

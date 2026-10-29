@@ -121,7 +121,9 @@ MERGE (parent)-[:{Rel.IN_SOURCE}]->(:{Label.SOURCE} {{id: $source_id}})
 """
 
 
-def upsert_document(graph, document: CanonicalDocument, *, now: datetime | None = None):
+def upsert_document(graph, document: CanonicalDocument, *, now: datetime | None = None, store=None):
+    """Upsert one document. An unknown source is not written. With a store, a new version is re-chunked."""
+
     allowed = _allowed(document)
     if allowed is None:
         return UpsertResult(node_id=document.node_id, applied=False)
@@ -150,6 +152,13 @@ def upsert_document(graph, document: CanonicalDocument, *, now: datetime | None 
             },
         )
         purge_legacy_item_edges(graph, document.node_id)
+    if store is not None and rows[0][0]:
+        from app.ingest.chunks import write_item_chunks  # app.ingest imports this module
+
+        write_item_chunks(
+            store, tenant_id=document.tenant_id, item_id=document.node_id, body=document.body,
+            acl_groups=params["acl_groups"], min_level=params["min_level"], deleted=document.deleted,
+        )
     email = _author_email(document)
     if email:
         link_author(

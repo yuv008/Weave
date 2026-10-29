@@ -1,7 +1,7 @@
 """Source-explicit Slack message contract.
 
-The full message body is not a field. Callers hash it, copy a short prefix
-into ``excerpt``, and drop the rest. ``visibility`` stays on the demo scope
+Callers hash the full message and copy a short prefix into ``excerpt`` for
+the graph. ``body`` carries the full text to the chunk table only. ``visibility`` stays on the demo scope
 until a real ACL model exists.
 """
 
@@ -44,6 +44,7 @@ class CanonicalMessage(BaseModel):
     deleted: bool = False
     source_url: str = ""
     excerpt: str = Field(default="", max_length=EXCERPT_LIMIT)
+    body: str = Field(default="", repr=False, exclude=True)
     content_hash: str
     visibility: str = "demo_single_tenant"
     metadata: dict[str, str | int | bool] = Field(default_factory=dict)

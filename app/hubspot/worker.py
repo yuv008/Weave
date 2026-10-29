@@ -8,7 +8,7 @@ from app.graph.upsert import ensure_indexes
 from app.graph.upsert_hubspot import upsert_hubspot_company, upsert_hubspot_deal
 from app.hubspot.client import HubspotRequestError
 from app.hubspot.normalize import normalize_company, normalize_deal
-from app.ingest.chunks import index_source
+from app.ingest.chunks import embed_pending
 from app.ingest.log import format_document_log
 from app.ingest.records import SYNC_STATE, open_store
 from app.ingest.state import write_connection
@@ -106,7 +106,7 @@ def poll_portal(
         },
     )
     records.note_source_sync(tenant_id, hubspot_source_id(tenant_id, portal_id), group)
-    index_source(graph, records, hubspot_source_id(tenant_id, portal_id))
+    embed_pending(records, tenant_id)
     logger.info(
         "%s",
         format_document_log(

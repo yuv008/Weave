@@ -5,7 +5,7 @@ import time
 
 from app.graph.policy import allowed_source, notion_source_id
 from app.graph.upsert import ensure_indexes
-from app.ingest.chunks import index_source
+from app.ingest.chunks import embed_pending
 from app.graph.upsert_document import upsert_document
 from app.ingest.log import format_document_log
 from app.ingest.records import SYNC_FAILURE, open_store
@@ -112,7 +112,7 @@ def poll_shared_pages(tenant_id: str, connection_id: str, workspace_id: str, cli
         )
         source = notion_source_id(tenant_id, workspace_id)
         records.note_source_sync(tenant_id, source, group)
-        index_source(graph, records, source)
+        embed_pending(records, tenant_id)
         logger.info(
             "%s",
             format_document_log(
@@ -160,7 +160,7 @@ def retry_notion_failures(graph, client, store=None, *, tenant_id: str) -> None:
             )
             if document is None:
                 raise ValueError("not a page")
-            upsert_document(graph, document)
+            upsert_document(graph, document, store=records)
         except ValueError:
             _remember(records, tenant_id, connection_id, workspace_id, page_id, "ValueError")
             continue
@@ -188,7 +188,7 @@ def _ingest_page(raw, tenant_id, connection_id, workspace_id, client, graph, sto
         return "blocked"
     if document is None:
         return "skipped"
-    upsert_document(graph, document)
+    upsert_document(graph, document, store=store)
     store.delete(failure)
     return "ok"
 

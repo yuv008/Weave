@@ -154,12 +154,21 @@ def _ensure_owner_level(tenant: str) -> None:
         log.warning("owner level was not set")
 
 
-def _mark_connected(name: str, tenant: str) -> None:
+_AUTH_ERRORS = {"invalid_auth", "token_revoked", "account_inactive", "not_authed"}
+
+
+def _auth_rejected(exc: Exception) -> bool:
+    """The provider refused the credentials, so only a reconnect helps. Anything else is retried."""
+
+    return getattr(exc, "status", None) == 401 or getattr(exc, "error", None) in _AUTH_ERRORS
+
+
+def _set_status(name: str, tenant: str, status: str) -> None:
     provider = "google" if name == "drive" else name
     try:
         from app.connect.credentials import current_store
 
-        current_store().update_status(tenant, provider, "connected")
+        current_store().update_status(tenant, provider, status)
     except Exception:
         log.warning("grant status was not updated")
 
@@ -375,9 +384,11 @@ def _poll_loop(name: str, once, every: int) -> None:
                 if tenant:
                     _ensure_owner_level(tenant)
                 if once(tenant) and tenant:
-                    _mark_connected(name, tenant)
-            except Exception:
+                    _set_status(name, tenant, "connected")
+            except Exception as exc:
                 log.exception("%s sync failed", name)
+                if tenant and _auth_rejected(exc):
+                    _set_status(name, tenant, "failed")
         if _stop.wait(every):
             return
 

@@ -693,11 +693,9 @@ def _schedule(app, background: BackgroundTasks, provider: str, tenant: str | Non
             except Exception:
                 pass
         except Exception as exc:
+            # The grant stays syncing and the worker retries it. Only the worker marks a
+            # grant failed, and only when the provider rejects the credentials.
             log.warning("connect poll failed (%s)", type(exc).__name__)
-            try:
-                store.update_status(chosen, provider, "failed")
-            except Exception:
-                pass
 
     background.add_task(job)
 
@@ -728,7 +726,7 @@ def _status(app, tenant: str | None = None) -> dict:
             "name": name,
             "status": status,
             "reason": reason if status == "unavailable" else "",
-            "connectable": provider in _CONNECTABLE and ready and status == "disconnected",
+            "connectable": provider in _CONNECTABLE and ready and status in {"disconnected", "failed"},
             "needs": needs,
         })
     if groq and groq.get("token"):

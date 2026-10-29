@@ -204,18 +204,58 @@ def test_missing_embedder_marks_the_grant_connected(monkeypatch):
     use_store(None)
 
 
-def test_a_connector_error_marks_the_grant_failed(monkeypatch):
+def test_a_connector_error_on_connect_leaves_the_grant_for_the_worker_to_retry(monkeypatch):
     monkeypatch.setenv("WEAVE_SECRET_KEY", "test-key")
     secrets = MemorySecretStore()
     secrets.put("real", "notion", "workspace", {"token": "ntn"}, status="syncing")
     app = _app(secrets)
 
     def boom(provider, tenant):
-        raise RuntimeError("notion")
+        raise TimeoutError("notion")
 
     app.state.poll_now = boom
     _schedule(app, _Now(), "notion")
-    assert secrets.get("real", "notion")["status"] == "failed"
+    assert secrets.get("real", "notion")["status"] == "syncing"
+    use_store(None)
+
+
+def test_the_worker_marks_a_grant_failed_only_when_the_credentials_are_rejected(monkeypatch):
+    from app.notion.client import NotionRequestError
+    from app.slack.client import SlackRequestError
+    from scripts import run_worker
+
+    statuses = []
+    monkeypatch.setattr(run_worker, "_grant_tenants", lambda name: ["north"])
+    monkeypatch.setattr(run_worker, "_ensure_owner_level", lambda tenant: None)
+    monkeypatch.setattr(run_worker, "_set_status", lambda name, tenant, status: statuses.append(status))
+    monkeypatch.setattr(run_worker._stop, "wait", lambda seconds: True)
+
+    for error, expected in (
+        (NotionRequestError(401, "unauthorized"), ["failed"]),
+        (SlackRequestError(200, "token_revoked"), ["failed"]),
+        (NotionRequestError(502, "bad_gateway"), []),
+        (TimeoutError("slow"), []),
+    ):
+        statuses.clear()
+
+        def once(tenant, error=error):
+            raise error
+
+        run_worker._poll_loop("notion", once, 60)
+        assert statuses == expected, error
+
+
+def test_a_failed_card_offers_reconnect(monkeypatch):
+    monkeypatch.setenv("WEAVE_SECRET_KEY", "test-key")
+    monkeypatch.setenv("NOTION_CLIENT_ID", "id")
+    monkeypatch.setenv("NOTION_CLIENT_SECRET", "secret")
+    secrets = MemorySecretStore()
+    secrets.put("real", "notion", "workspace", {"token": "ntn"}, status="failed")
+    app = _app(secrets)
+    from app.connect.routes import _status
+
+    card = next(card for card in _status(app, "real")["connectors"] if card["id"] == "notion")
+    assert card["status"] == "failed" and card["connectable"] is True
     use_store(None)
 
 

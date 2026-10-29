@@ -219,7 +219,7 @@ function cardView(card) {
     const link = document.createElement("a");
     link.className = "button";
     link.href = "/connect/" + card.id;
-    link.textContent = "Connect";
+    link.textContent = card.status === "failed" ? "Reconnect" : "Connect";
     wrap.append(link);
   } else {
     const link = document.createElement("span");

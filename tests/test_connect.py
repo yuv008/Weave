@@ -343,3 +343,31 @@ def test_github_connect_needs_the_app_client_secret(monkeypatch):
     assert configured("github")[0] is False
     _github_env(monkeypatch)
     assert configured("github") == (True, "")
+
+
+def test_the_worker_starts_every_connector_loop_even_with_nothing_connected_yet(monkeypatch):
+    import threading
+
+    from scripts import run_worker
+
+    started = []
+
+    class Thread:
+        def __init__(self, target=None, name=None, args=(), daemon=None):
+            self.name = name
+
+        def start(self):
+            started.append(self.name)
+
+    stop = threading.Event()
+    stop.set()
+    monkeypatch.setattr(run_worker, "_stop", stop)
+    monkeypatch.setattr(run_worker.threading, "Thread", Thread)
+    monkeypatch.setattr(run_worker.signal, "signal", lambda *args: None)
+    monkeypatch.setattr("shared.env.load_env", lambda: None)
+    monkeypatch.setattr("shared.pg.warm_pg", lambda: None)
+    monkeypatch.setattr(run_worker, "_grant_tenants", lambda name: [])
+
+    run_worker.main()
+
+    assert sorted(started) == ["drive", "github", "notion", "slack", "watcher"]

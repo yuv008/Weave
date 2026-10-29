@@ -3,8 +3,9 @@
 Usage: python scripts/run_worker.py
 
 The watcher is a child process: ``python -m agents.watcher --every``.
-Slack, Notion, Drive, and GitHub each poll on their own thread, and only
-when the env vars that connector needs are set. A failure is logged and
+Slack, Notion, Drive, and GitHub each poll on their own thread. Every loop
+starts, so a company that connects a tool later is picked up without a
+restart; a loop with nothing to poll does nothing. A failure is logged and
 does not stop the other loops. Webhooks stay on ``app.main`` and are not
 started here.
 """
@@ -26,37 +27,6 @@ log = logging.getLogger("weave.worker")
 _stop = threading.Event()
 _watcher: subprocess.Popen | None = None
 _watcher_lock = threading.Lock()
-
-
-def _set(*names: str) -> bool:
-    return all(os.environ.get(name, "").strip() for name in names)
-
-
-def slack_ready() -> bool:
-    from app.connect.credentials import slack_bot_token, slack_workspace_id
-
-    tenant = _env("WEAVE_TENANT_ID") or _env("WEAVE_TENANT")
-    return bool(tenant and slack_bot_token() and slack_workspace_id())
-
-
-def notion_ready() -> bool:
-    from app.connect.credentials import notion_token, notion_workspace_id
-
-    tenant = _env("WEAVE_TENANT_ID") or _env("WEAVE_TENANT")
-    return bool(tenant and notion_token() and notion_workspace_id())
-
-
-def drive_ready() -> bool:
-    from app.connect.credentials import google_folder_id
-
-    return bool(google_folder_id())
-
-
-def github_ready() -> bool:
-    from app.connect.credentials import github_access_token, github_coordinates
-
-    owner, repo = github_coordinates()
-    return bool(owner and repo and github_access_token())
 
 
 def _grant_tenants(name: str) -> list[str]:
@@ -395,10 +365,10 @@ def _poll_loop(name: str, once, every: int) -> None:
 
 def _connectors():
     return (
-        ("slack", slack_ready, _slack_once),
-        ("notion", notion_ready, _notion_once),
-        ("drive", drive_ready, _drive_once),
-        ("github", github_ready, _github_once),
+        ("slack", _slack_once),
+        ("notion", _notion_once),
+        ("drive", _drive_once),
+        ("github", _github_once),
     )
 
 
@@ -425,10 +395,7 @@ def main() -> None:
         args=("watcher", [sys.executable, "-m", "agents.watcher", "--every"], every),
         daemon=True,
     ).start()
-    for name, ready, once in _connectors():
-        if not ready() and not _grant_tenants(name):
-            log.info("%s sync skipped", name)
-            continue
+    for name, once in _connectors():
         log.info("%s sync started", name)
         threading.Thread(target=_poll_loop, args=(name, once, every), name=name, daemon=True).start()
     while not _stop.is_set():

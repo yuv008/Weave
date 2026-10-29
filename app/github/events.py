@@ -8,7 +8,7 @@ import hashlib
 import hmac
 import logging
 
-from app.github.normalize import normalize_github_comment, normalize_github_issue
+from app.github.normalize import is_bot, normalize_github_comment, normalize_github_issue
 from app.graph.upsert_document import upsert_document
 
 logger = logging.getLogger("weave.github.events")
@@ -74,7 +74,7 @@ def _document(payload, event, action, tenant_id, connection_id, repo_id, owner, 
         comment = payload.get("comment")
         issue = payload.get("issue")
         number = issue.get("number") if isinstance(issue, dict) else None
-        if not isinstance(comment, dict):
+        if not isinstance(comment, dict) or is_bot(comment):
             return None
         return normalize_github_comment(
             comment,
@@ -88,7 +88,7 @@ def _document(payload, event, action, tenant_id, connection_id, repo_id, owner, 
         )
     if event == "pull_request":
         pull = payload.get("pull_request")
-        if not isinstance(pull, dict):
+        if not isinstance(pull, dict) or is_bot(pull):
             return None
         return normalize_github_issue(
             pull,
@@ -100,7 +100,7 @@ def _document(payload, event, action, tenant_id, connection_id, repo_id, owner, 
             kind="pull_request",
         )
     issue = payload.get("issue")
-    if not isinstance(issue, dict):
+    if not isinstance(issue, dict) or is_bot(issue):
         return None
     return normalize_github_issue(
         issue,

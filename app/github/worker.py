@@ -5,7 +5,7 @@ import time
 from datetime import UTC, datetime
 
 from app.github.client import GitHubRequestError
-from app.github.normalize import normalize_github_comment, normalize_github_issue
+from app.github.normalize import is_bot, normalize_github_comment, normalize_github_issue
 from app.graph.policy import allowed_source, github_source_id
 from app.graph.upsert import ensure_indexes
 from app.ingest.chunks import index_source
@@ -80,6 +80,10 @@ def poll_repository(tenant_id: str, connection_id: str, owner: str, repo: str, c
                     failed = True
                     break
                 if not _same_listed_repo(raw, repo_id):
+                    continue
+                if is_bot(raw):
+                    # Not stored, and its comments are not fetched, but the watermark moves past it.
+                    greatest = _later(greatest, raw.get("updated_at"))
                     continue
                 outcome = _ingest_issue(raw, tenant_id, connection_id, repo_id, owner, repo, graph, records)
                 if outcome == "blocked":
@@ -230,6 +234,9 @@ def _sync_comments(raw, *, tenant_id, connection_id, repo_id, owner, repo, clien
         comments = listed.payload if isinstance(listed.payload, list) else []
         blocked = False
         for comment in comments:
+            if isinstance(comment, dict) and is_bot(comment):
+                greatest = _later(greatest, comment.get("updated_at"))
+                continue
             if not isinstance(comment, dict):
                 _remember(
                     store, tenant_id, connection_id, repo_id, owner, repo,

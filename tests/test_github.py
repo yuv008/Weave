@@ -601,3 +601,39 @@ def test_older_github_edit_does_not_replace_a_newer_excerpt(graph):
     excerpt = graph.query("MATCH (d:Issue {id: $id}) RETURN d.excerpt", {"id": issue.node_id}).result_set[0][0]
     assert "current decision" in excerpt
     assert "old decision" not in excerpt
+
+
+def test_bot_posts_are_not_stored_but_the_watermark_moves_past_them(monkeypatch):
+    from app.github import events, worker
+    from app.github.normalize import is_bot
+
+    class Empty:
+        result_set = []
+
+    class Graph:
+        def query(self, *args, **kwargs):
+            return Empty()
+
+    stored = []
+    monkeypatch.setattr(worker, "upsert_document", lambda graph, document: stored.append(document.external_id))
+    bot = {**_issue(7, "2026-03-12T00:00:00Z", pull={"url": "x"}), "user": {"login": "dependabot[bot]", "type": "Bot"}}
+
+    class Client:
+        def get_repo(self, owner, repo):
+            return GitHubResult({"id": 99}, "")
+
+        def list_issues(self, owner, repo, page, since):
+            return GitHubResult([_issue(1, "2026-03-11T00:00:00Z"), bot], "")
+
+        def list_comments(self, owner, repo, number, page, since):
+            assert str(number) == "1", "a bot PR's comments are not fetched"
+            ci = {**_comment(20, 1, "2026-03-13T00:00:00Z", "build passed"), "user": {"login": "ci", "type": "Bot"}}
+            return GitHubResult([_comment(10, 1, "2026-03-11T00:30:00Z", "looks good"), ci], "")
+
+    store = MemoryStore()
+    poll_repository("demo", "github-main", "demo-org", "sso-service", Client(), Graph(), store)
+
+    assert stored == ["issue:1", "comment:10"]
+    assert store.get(github_sync_id("demo", "99"))["payload"]["since"].startswith("2026-03-13")
+    assert is_bot({"user": {"login": "renovate[bot]"}}) and not is_bot({"user": {"login": "ada"}})
+    assert events._document({"issue": bot}, "issues", "opened", "demo", "c", "99", "o", "r") is None

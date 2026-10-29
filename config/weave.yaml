@@ -124,12 +124,6 @@ sources:
     cascade_policy: manual
     authority: 2
     org_wide: true
-  "github:yuv008/portfolio":
-    name: "Portfolio"
-    min_level: 0
-    cascade_policy: manual
-    authority: 2
-    org_wide: true
   "slack:C0C90JZ4YMP":
     name: "social"
     min_level: 0
@@ -159,27 +153,12 @@ sources:
     min_level: 1
     cascade_policy: manual
     authority: 2
-  "gmail:yuvrajsanghai9@gmail.com":
-    name: "Gmail mailbox"
-    min_level: 1
-    cascade_policy: manual
-    authority: 2
   "gcal:primary":
     name: "Company calendar"
     min_level: 0
     cascade_policy: manual
     authority: 2
     org_wide: true
-  "gcal:yuvrajsanghai9@gmail.com":
-    name: "Google Calendar"
-    min_level: 1
-    cascade_policy: manual
-    authority: 2
-  "hubspot:247718406":
-    name: "HubSpot CRM"
-    min_level: 1
-    cascade_policy: manual
-    authority: 2
   "hubspot:demo-portal":
     name: "HubSpot CRM"
     min_level: 0

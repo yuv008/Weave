@@ -14,7 +14,12 @@ A kept live write now exists in graph `co:real`. The fixture graph `co:acme` was
 | Postgres `chunk` | 17 embedded excerpts. One stored item had an empty excerpt and has no chunk |
 | Postgres `ingest_record` | Checkpoints, failures, and Slack event ids |
 
-The polled sources are GitHub `yuv008/portfolio`, the two public Slack channels `#social` and `#all-new-workspace`, the Notion workspace, and the shared Drive folder. The private `Weave` repository was not polled. `GITHUB_REPO` is `portfolio`.
+The polled sources are GitHub `yuv008/Weave`, the two public Slack channels `#social` and `#all-new-workspace`, the Notion workspace, and the shared Drive folder. All are org-wide.
+- `yuv008/portfolio` was polled through the environment's `GITHUB_REPO` until the home company connected GitHub through the app with `Weave` chosen.
+- The worker polls the environment settings only when no company holds a grant for that tool. So `portfolio` stopped there, and on 29 October 2026 it was taken out of config.
+- The one-off Gmail, personal calendar, and HubSpot loads were taken out of config the same way. The worker never polled them.
+- `python -m scripts.prune_source --tenant real --group <group> [--dry-run]` removes a source's stored data.
+- GitHub items written by bots are not stored.
 
 The viewer is Yuvraj Sanghai, level 1, department engineering. The person id is the mailbox in `WEAVE_VIEWER_EMAIL`, which is not committed. Slack `users.info` set that person's Slack id and display name, and moved `AUTHORED` and `AUTHORED_BY` onto that node. The other Slack author has a display name and no email, level, or department. GitHub returned no public email, so the old noreply person node was removed after the mailbox id was chosen.
 

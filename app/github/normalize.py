@@ -127,6 +127,15 @@ def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def is_bot(payload: dict) -> bool:
+    """Bot posts (Dependabot, CI) are boilerplate, not company knowledge, so they are not stored."""
+
+    user = payload.get("user") if isinstance(payload, dict) else None
+    if not isinstance(user, dict):
+        return False
+    return user.get("type") == "Bot" or str(user.get("login") or "").endswith("[bot]")
+
+
 def _login(payload: dict) -> str:
     user = payload.get("user")
     if isinstance(user, dict) and isinstance(user.get("login"), str):

@@ -15,7 +15,7 @@ from app.graph.upsert import upsert_message
 from app.ingest.records import open_store
 from app.ingest.state import event_already_applied, mark_event_applied
 from app.models.canonical import conversation_node_id
-from app.slack.normalize import PUBLIC_CHANNEL, normalize_slack_message
+from app.slack.normalize import PUBLIC_CHANNEL, is_channel_event, normalize_slack_message
 
 logger = logging.getLogger("weave.slack.events")
 _MAX_SKEW_SECONDS = 60 * 5
@@ -66,7 +66,7 @@ def apply_slack_event(
     if not isinstance(event, dict) or event.get("type") != "message":
         return {"ok": True}
     channel_id = event.get("channel") if isinstance(event.get("channel"), str) else ""
-    if not _is_public_event(event, graph, tenant_id, workspace_id, channel_id):
+    if is_channel_event(event) or not _is_public_event(event, graph, tenant_id, workspace_id, channel_id):
         logger.info("slack_event_skip channel_id=%s", channel_id)
         return {"ok": True}
     event_id = payload.get("event_id") if isinstance(payload.get("event_id"), str) else ""

@@ -15,6 +15,15 @@ from app.models.canonical import EXCERPT_LIMIT, CanonicalMessage
 _TS = re.compile(r"^\d+(\.\d+)?$")
 _METADATA_KEYS = ("subtype", "bot_id", "client_msg_id")
 PUBLIC_CHANNEL = "public_channel"
+# Slack writes these into the channel itself. They are noise, not knowledge.
+CHANNEL_EVENTS = frozenset({
+    "channel_join", "channel_leave", "channel_topic", "channel_purpose",
+    "channel_name", "channel_archive", "channel_unarchive",
+})
+
+
+def is_channel_event(raw: dict) -> bool:
+    return isinstance(raw, dict) and raw.get("subtype") in CHANNEL_EVENTS
 
 
 def format_slack_version(ts: str) -> str:

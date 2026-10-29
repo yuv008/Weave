@@ -20,7 +20,8 @@ from shared.schema import CLAIM_LABELS, CONTRACT_LABELS, Label, Prop, Rel
 
 MAX_LIMIT = 20
 RRF_K = 60
-TIE = 0.001
+# RRF scores of adjacent ranks differ by ~0.00026, so a tie means an equal position in different lists.
+TIE = 0.0001
 SNIPPET_CHARS = 400
 _EMPTY_HASH = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 

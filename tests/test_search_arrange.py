@@ -38,14 +38,16 @@ def test_same_text_without_a_hash_still_collapses():
 
 
 def test_a_near_tie_goes_to_the_more_authoritative_then_newer_source():
-    ranked = [("slack", 0.01640), ("notion", 0.01635), ("drive-old", 0.01633), ("far", 0.0100)]
+    # Equal fused scores: the same rank in the keyword list and in the vector list.
+    ranked = [("slack", 0.016393), ("notion", 0.016393), ("drive-old", 0.016393), ("next", 0.016129)]
     meta = {
         "slack": ("1" * 64, "2026-10-28", 1),
         "notion": ("2" * 64, "2026-10-01", 3),
         "drive-old": ("3" * 64, "2026-01-01", 3),
-        "far": ("4" * 64, "2026-10-29", 3),
+        "next": ("4" * 64, "2026-10-29", 3),
     }
 
     hits = arrange(ranked, meta, {})
 
-    assert [hit["item"] for hit in hits] == ["notion", "drive-old", "slack", "far"]
+    # A lower-ranked hit stays below, however authoritative or new it is.
+    assert [hit["item"] for hit in hits] == ["notion", "drive-old", "slack", "next"]

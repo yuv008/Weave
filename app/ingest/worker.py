@@ -30,7 +30,7 @@ from app.ingest.state import (
 )
 from app.models.canonical import message_node_id
 from app.slack.client import SlackClient, SlackRequestError
-from app.slack.normalize import PUBLIC_CHANNEL, format_slack_version, normalize_slack_message
+from app.slack.normalize import PUBLIC_CHANNEL, format_slack_version, is_channel_event, normalize_slack_message
 
 _MAX_FAILURES = 5
 logger = logging.getLogger("weave.ingest")
@@ -431,6 +431,8 @@ def _ingest_one(
     workspace_domain: str | None,
     store,
 ) -> str:
+    if is_channel_event(raw):
+        return "skipped"
     ts = _message_ts(raw)
     node = failure_id(tenant_id, channel_id, ts or "missing")
     if failure_attempts(store, node) >= _MAX_FAILURES:

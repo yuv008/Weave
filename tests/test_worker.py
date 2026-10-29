@@ -284,3 +284,19 @@ def test_backfill_logs_omit_message_text(graph, caplog):
 
     assert secret not in caplog.text
     assert "tenant_id=tenant1" in caplog.text
+
+
+def test_slack_channel_events_are_not_stored():
+    from app.ingest.worker import _ingest_one
+    from app.slack.events import apply_slack_event
+
+    join = {"type": "message", "subtype": "channel_join", "user": "U1", "ts": "1700000000.000100",
+            "text": "<@U1> has joined the channel"}
+    common = {"tenant_id": TENANT, "connection_id": "conn1", "workspace_id": "T1", "channel_id": "C0ENGPUB",
+              "workspace_domain": None}
+    # The graph is never touched: a skipped message returns before any write.
+    assert _ingest_one(join, graph=None, store=MemoryStore(), **common) == "skipped"
+    payload = {"type": "event_callback", "event_id": "Ev1",
+               "event": {**join, "channel": "C0ENGPUB", "channel_type": "channel"}}
+    assert apply_slack_event(payload, None, tenant_id=TENANT, connection_id="conn1", workspace_id="T1",
+                             store=MemoryStore()) == {"ok": True}

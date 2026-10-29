@@ -193,16 +193,34 @@ def _ingest_page(raw, tenant_id, connection_id, workspace_id, client, graph, sto
     return "ok"
 
 
-def _page_text(client, page_id: str) -> str:
+# Toggles, columns, and synced blocks nest their text. Child pages are not followed:
+# search returns each of them as its own page.
+_MAX_DEPTH = 3
+
+
+def _page_text(client, block_id: str, depth: int = 0) -> str:
     blocks = []
     cursor = None
     while True:
-        payload = client.block_children(page_id, cursor)
+        payload = client.block_children(block_id, cursor)
         blocks.extend(payload.get("results") or [])
         cursor = _next_cursor(payload)
         if not cursor:
             break
-    return plain_text_from_blocks(blocks)
+    parts = []
+    for block in blocks:
+        text = plain_text_from_blocks([block])
+        if text:
+            parts.append(text)
+        nested = (
+            isinstance(block, dict) and block.get("has_children") and isinstance(block.get("id"), str)
+            and block.get("type") not in {"child_page", "child_database"} and depth < _MAX_DEPTH
+        )
+        if nested:
+            inner = _page_text(client, block["id"], depth + 1)
+            if inner:
+                parts.append(inner)
+    return "\n".join(parts)
 
 
 def _remember(store, tenant_id, connection_id, workspace_id, page_id, error_class) -> None:

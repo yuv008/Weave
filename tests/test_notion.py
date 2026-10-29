@@ -234,3 +234,38 @@ def test_notion_answer_skips_a_deleted_document(graph):
     assert len(answer.citations) == 1
     assert answer.citations[0].source_url == "https://www.notion.so/live"
     assert "annual plan secret" not in answer.text
+
+
+def test_page_text_reads_nested_toggles_code_and_tables_but_not_child_pages():
+    from app.notion.worker import _page_text
+
+    def para(text, block_id=None, children=False, kind="paragraph"):
+        return {"id": block_id or text, "type": kind, "has_children": children,
+                kind: {"rich_text": [{"plain_text": text}]}}
+
+    tree = {
+        "page": [
+            para("Intro"),
+            para("Details", block_id="toggle-1", children=True, kind="toggle"),
+            {"id": "sub", "type": "child_page", "has_children": True, "child_page": {"title": "Sub"}},
+            {"id": "t", "type": "table", "has_children": True, "table": {}},
+        ],
+        "toggle-1": [para("print('hi')", kind="code"), para("Deep", block_id="d1", children=True)],
+        "d1": [para("Deeper", block_id="d2", children=True)],
+        "d2": [para("Deepest", block_id="d3", children=True)],
+        "d3": [para("Too deep")],
+        "t": [{"id": "r", "type": "table_row", "has_children": False,
+               "table_row": {"cells": [[{"plain_text": "Q4"}], [{"plain_text": "$2M"}]]}}],
+        "sub": [para("Belongs to the child page")],
+    }
+
+    class Client:
+        def block_children(self, block_id, cursor=None):
+            return {"results": tree[block_id], "has_more": False}
+
+    text = _page_text(Client(), "page")
+
+    for expected in ("Intro", "Details", "print('hi')", "Deepest", "Q4 | $2M"):
+        assert expected in text
+    assert "Too deep" not in text
+    assert "Belongs to the child page" not in text

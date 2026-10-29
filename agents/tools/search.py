@@ -22,7 +22,8 @@ MAX_LIMIT = 20
 RRF_K = 60
 # RRF scores of adjacent ranks differ by ~0.00026, so a tie means an equal position in different lists.
 TIE = 0.0001
-SNIPPET_CHARS = 400
+# A whole chunk (CHUNK_CHARS in app.ingest.chunks), so the answer step sees the matching sentence.
+SNIPPET_CHARS = 1200
 _EMPTY_HASH = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 _KEYWORD = f"""

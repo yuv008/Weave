@@ -51,3 +51,10 @@ def test_a_near_tie_goes_to_the_more_authoritative_then_newer_source():
 
     # A lower-ranked hit stays below, however authoritative or new it is.
     assert [hit["item"] for hit in hits] == ["notion", "drive-old", "slack", "next"]
+
+
+def test_a_snippet_carries_a_whole_chunk():
+    from agents.tools.search import SNIPPET_CHARS
+    from app.ingest.chunks import CHUNK_CHARS
+
+    assert SNIPPET_CHARS >= CHUNK_CHARS
